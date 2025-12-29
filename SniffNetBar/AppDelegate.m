@@ -166,6 +166,13 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
         self.selectedDevice = [NetworkDevice defaultDevice];
     }
 
+    // Double-check we have a valid device
+    if (!self.selectedDevice || [self.selectedDevice.name isEqualToString:@"(no device)"]) {
+        NSLog(@"Error: No valid network device available for capture");
+        self.statusItem.button.title = @"❌ No Device";
+        return;
+    }
+
     NSError *error;
     if (![self.packetManager startCaptureWithDeviceName:self.selectedDevice.name error:&error]) {
         NSLog(@"Failed to start packet capture: %@", error.localizedDescription);
@@ -178,7 +185,11 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
                   (unsigned long)self.reconnectAttempts,
                   (unsigned long)kMaxReconnectAttempts,
                   kReconnectDelay);
-            [self performSelector:@selector(attemptReconnection) withObject:nil afterDelay:kReconnectDelay];
+            __weak typeof(self) weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kReconnectDelay * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [weakSelf attemptReconnection];
+            });
         } else {
             NSLog(@"Maximum reconnection attempts reached. Manual intervention required.");
         }
@@ -242,11 +253,10 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     // Always update status bar
     TrafficStats *stats = [self.statistics getCurrentStats];
     NSString *deviceDisplay = (self.selectedDevice && self.selectedDevice.name) ? [NSString stringWithFormat:@"[%@] ", self.selectedDevice.name] : @"";
-    if (self.statusItem.button.image) {
-        self.statusItem.button.title = [NSString stringWithFormat:@"%@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
-    } else {
-        self.statusItem.button.title = [NSString stringWithFormat:@"📊 %@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
-    }
+
+    // Update status bar title (same regardless of icon presence)
+    NSString *rateDisplay = [NSString stringWithFormat:@"%@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
+    self.statusItem.button.title = rateDisplay;
 
     // If menu is open, update it with live data
     if (self.menuIsOpen) {
@@ -428,7 +438,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     
     // Update status bar title
     NSString *deviceDisplay = (self.selectedDevice && self.selectedDevice.name) ? [NSString stringWithFormat:@"[%@] ", self.selectedDevice.name] : @"";
-    self.statusItem.button.title = [NSString stringWithFormat:@"📊 %@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
+    self.statusItem.button.title = [NSString stringWithFormat:@"%@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
     
     if (self.showMap && self.menuIsOpen && self.mapMenuView) {
         [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];

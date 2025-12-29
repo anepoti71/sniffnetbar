@@ -91,20 +91,28 @@
 + (NetworkDevice *)defaultDevice {
     char errbuf[PCAP_ERRBUF_SIZE];
     char *defaultDev = pcap_lookupdev(errbuf);
-    
+
+    NSArray<NetworkDevice *> *allDevices = [self listAllDevices];
+
     if (defaultDev) {
         NSString *devName = [NSString stringWithUTF8String:defaultDev];
-        NSArray<NetworkDevice *> *allDevices = [self listAllDevices];
         for (NetworkDevice *device in allDevices) {
             if ([device.name isEqualToString:devName]) {
                 return device;
             }
         }
     }
-    
+
     // Fallback: return first available device
-    NSArray<NetworkDevice *> *allDevices = [self listAllDevices];
-    return allDevices.firstObject;
+    if (allDevices.count > 0) {
+        return allDevices.firstObject;
+    }
+
+    // No devices available - return placeholder to prevent nil
+    NSLog(@"Warning: No network devices available, returning placeholder");
+    return [[NetworkDevice alloc] initWithName:@"(no device)"
+                                   description:@"No network devices found"
+                                     addresses:@[]];
 }
 
 - (NSString *)displayName {

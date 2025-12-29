@@ -281,7 +281,9 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
             continue;
         }
         NSString *name = value[@"name"];
-        NSString *title = name.length > 0 ? [NSString stringWithFormat:@"%@ — %@", ip, name] : ip;
+        NSString *isp = value[@"isp"];
+        NSString *locationPart = name.length > 0 ? [NSString stringWithFormat:@"%@ — %@", ip, name] : ip;
+        NSString *title = isp.length > 0 ? [NSString stringWithFormat:@"%@\nISP: %@", locationPart, isp] : locationPart;
         [points addObject:@{@"lat": @(coord.latitude), @"lon": @(coord.longitude), @"title": title}];
     }
     
@@ -505,6 +507,7 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         CLLocationDegrees lon = 0;
         BOOL success = NO;
         NSString *name = nil;
+        NSString *isp = nil;
         
         if ([provider isEqualToString:@"ip-api.com"]) {
             NSString *status = dict[@"status"];
@@ -514,6 +517,7 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
                 NSString *city = dict[@"city"];
                 NSString *region = dict[@"regionName"];
                 NSString *country = dict[@"country"];
+                isp = dict[@"isp"];
                 NSMutableArray<NSString *> *parts = [NSMutableArray array];
                 if (city.length > 0) [parts addObject:city];
                 if (region.length > 0) [parts addObject:region];
@@ -530,6 +534,13 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
                 NSString *city = dict[@"city"];
                 NSString *region = dict[@"region"];
                 NSString *country = dict[@"country"];
+                NSString *org = dict[@"org"];
+                NSString *company = dict[@"company"];
+                if (org.length > 0) {
+                    isp = org;
+                } else if (company.length > 0) {
+                    isp = company;
+                }
                 NSMutableArray<NSString *> *nameParts = [NSMutableArray array];
                 if (city.length > 0) [nameParts addObject:city];
                 if (region.length > 0) [nameParts addObject:region];
@@ -555,6 +566,9 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
             NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:@{@"lat": @(lat), @"lon": @(lon)}];
             if (name.length > 0) {
                 payload[@"name"] = name;
+            }
+            if (isp.length > 0) {
+                payload[@"isp"] = isp;
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.locationCache[ip] = payload;

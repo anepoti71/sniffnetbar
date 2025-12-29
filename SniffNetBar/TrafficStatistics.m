@@ -32,6 +32,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 @property (nonatomic, strong) NSMutableSet<NSString *> *localAddresses;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *hostnameCache;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDate *> *hostnameCacheTimestamps;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *dnsLookupLocks;
 @property (nonatomic, strong) dispatch_queue_t statsQueue;
 @property (nonatomic, strong) NSDate *lastUpdateTime;
 @property (nonatomic, assign) uint64_t lastTotalBytes;
@@ -50,6 +51,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
         _connectionStats = [NSMutableDictionary dictionary];
         _hostnameCache = [NSMutableDictionary dictionary];
         _hostnameCacheTimestamps = [NSMutableDictionary dictionary];
+        _dnsLookupLocks = [NSMutableDictionary dictionary];
         _statsQueue = dispatch_queue_create("com.sniffnetbar.stats", DISPATCH_QUEUE_SERIAL);
         _localAddresses = [NSMutableSet set];
         _statsCacheDirty = YES;
@@ -216,12 +218,16 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
                 host.hostname = self.hostnameCache[remoteAddress];
                 if (!host.hostname) {
                     // Perform reverse DNS lookup asynchronously
+                    __weak typeof(self) weakSelf = self;
                     [self performReverseDNSLookup:remoteAddress completion:^(NSString *hostname) {
-                        dispatch_async(self.statsQueue, ^{
+                        __strong typeof(weakSelf) strongSelf = weakSelf;
+                        if (!strongSelf) return;
+
+                        dispatch_async(strongSelf.statsQueue, ^{
                             if (hostname) {
-                                self.hostnameCache[remoteAddress] = hostname;
-                                self.hostnameCacheTimestamps[remoteAddress] = [NSDate date];
-                                HostTraffic *h = self.hostStats[remoteAddress];
+                                strongSelf.hostnameCache[remoteAddress] = hostname;
+                                strongSelf.hostnameCacheTimestamps[remoteAddress] = [NSDate date];
+                                HostTraffic *h = strongSelf.hostStats[remoteAddress];
                                 if (h) {
                                     h.hostname = hostname;
                                 }
@@ -254,6 +260,13 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 }
 
 - (void)performReverseDNSLookup:(NSString *)address completion:(void (^)(NSString *))completion {
+    // Get or create a dedicated lock object for this address
+    NSObject *lock = self.dnsLookupLocks[address];
+    if (!lock) {
+        lock = [[NSObject alloc] init];
+        self.dnsLookupLocks[address] = lock;
+    }
+
     dispatch_group_t group = dispatch_group_create();
     dispatch_group_enter(group);
 
@@ -283,7 +296,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
         char hostname[NI_MAXHOST];
         int result = getnameinfo(sa, salen, hostname, NI_MAXHOST, NULL, 0, NI_NAMEREQD);
 
-        @synchronized(address) {
+        @synchronized(lock) {  // Use dedicated lock object
             if (!lookupCompleted) {
                 if (result == 0) {
                     resultHostname = [NSString stringWithUTF8String:hostname];
@@ -297,7 +310,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
     // Set up timeout
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kDNSLookupTimeout * NSEC_PER_SEC)),
                    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        @synchronized(address) {
+        @synchronized(lock) {  // Use dedicated lock object
             if (!lookupCompleted) {
                 lookupCompleted = YES;
                 NSLog(@"DNS lookup timeout for %@", address);
