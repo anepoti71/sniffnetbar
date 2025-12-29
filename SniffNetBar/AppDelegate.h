@@ -7,10 +7,9 @@
 
 #import <Cocoa/Cocoa.h>
 
-@interface AppDelegate : NSObject <NSApplicationDelegate>
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) NSMenu *statusMenu;
 
 @end
-

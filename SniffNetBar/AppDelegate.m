@@ -9,10 +9,21 @@
 #import "PacketCaptureManager.h"
 #import "TrafficStatistics.h"
 #import "NetworkDevice.h"
-#import "MapWindowController.h"
+#import "MapMenuView.h"
 
 static NSString *const kSelectedDeviceKey = @"SelectedNetworkDevice";
 static NSString *const kMapProviderKey = @"MapProvider";
+
+// UI update configuration
+static const NSTimeInterval kMenuUpdateInterval = 1.0;        // Update UI every second
+static const NSTimeInterval kDeviceListRefreshInterval = 30.0; // Refresh device list every 30 seconds
+static const NSUInteger kMaxTopHostsToShow = 5;               // Number of top hosts in menu
+static const NSUInteger kMaxTopConnectionsToShow = 10;        // Number of top connections in menu
+static const CGFloat kMapMenuViewHeight = 220.0;              // Height of map view in pixels
+
+// Reconnection configuration
+static const NSTimeInterval kReconnectDelay = 5.0;            // Delay before reconnection attempt
+static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconnection attempts
 
 @interface AppDelegate ()
 @property (nonatomic, strong) PacketCaptureManager *packetManager;
@@ -24,7 +35,11 @@ static NSString *const kMapProviderKey = @"MapProvider";
 @property (nonatomic, assign) BOOL showTopConnections;
 @property (nonatomic, assign) BOOL showMap;
 @property (nonatomic, copy) NSString *mapProviderName;
-@property (nonatomic, strong) MapWindowController *mapWindowController;
+@property (nonatomic, strong) MapMenuView *mapMenuView;
+@property (nonatomic, strong) NSMenuItem *mapMenuItem;
+@property (nonatomic, assign) BOOL menuIsOpen;
+@property (nonatomic, strong) NSTimer *deviceRefreshTimer;
+@property (nonatomic, assign) NSUInteger reconnectAttempts;
 @end
 
 @implementation AppDelegate
@@ -40,6 +55,7 @@ static NSString *const kMapProviderKey = @"MapProvider";
     
     // Create menu
     self.statusMenu = [[NSMenu alloc] init];
+    self.statusMenu.delegate = self;
     
     // Initialize packet capture manager
     self.packetManager = [[PacketCaptureManager alloc] init];
@@ -48,7 +64,7 @@ static NSString *const kMapProviderKey = @"MapProvider";
     self.showTopConnections = YES;
     self.showMap = NO;
     NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderKey];
-    self.mapProviderName = savedProvider.length > 0 ? savedProvider : @"ip-api.com";
+    self.mapProviderName = savedProvider.length > 0 ? savedProvider : @"ipinfo.io";
     
     // Set up callback for packet updates
     __weak typeof(self) weakSelf = self;
@@ -65,13 +81,27 @@ static NSString *const kMapProviderKey = @"MapProvider";
     
     // Start packet capture
     [self startCaptureWithCurrentDevice];
-    
-    // Set up timer to update UI every second
-    self.updateTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
-                                                         target:self
-                                                       selector:@selector(updateMenu)
-                                                       userInfo:nil
-                                                        repeats:YES];
+
+    // Set up timer to update UI (use block-based timer to avoid retain cycle)
+    // Note: weakSelf already declared above for packet callback
+    self.updateTimer = [NSTimer scheduledTimerWithTimeInterval:kMenuUpdateInterval
+                                                         repeats:YES
+                                                           block:^(NSTimer *timer) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf) {
+            [strongSelf updateMenuIfNeeded];
+        }
+    }];
+
+    // Set up timer to periodically refresh device list
+    self.deviceRefreshTimer = [NSTimer scheduledTimerWithTimeInterval:kDeviceListRefreshInterval
+                                                               repeats:YES
+                                                                 block:^(NSTimer *timer) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf) {
+            [strongSelf refreshDeviceList];
+        }
+    }];
 }
 
 - (void)statusItemClicked:(id)sender {
@@ -120,11 +150,61 @@ static NSString *const kMapProviderKey = @"MapProvider";
     if (!self.selectedDevice) {
         self.selectedDevice = [NetworkDevice defaultDevice];
     }
-    
+
     NSError *error;
     if (![self.packetManager startCaptureWithDeviceName:self.selectedDevice.name error:&error]) {
         NSLog(@"Failed to start packet capture: %@", error.localizedDescription);
         self.statusItem.button.title = @"❌";
+
+        // Attempt automatic reconnection
+        if (self.reconnectAttempts < kMaxReconnectAttempts) {
+            self.reconnectAttempts++;
+            NSLog(@"Scheduling reconnection attempt %lu of %lu in %.0f seconds",
+                  (unsigned long)self.reconnectAttempts,
+                  (unsigned long)kMaxReconnectAttempts,
+                  kReconnectDelay);
+            [self performSelector:@selector(attemptReconnection) withObject:nil afterDelay:kReconnectDelay];
+        } else {
+            NSLog(@"Maximum reconnection attempts reached. Manual intervention required.");
+        }
+    } else {
+        // Successfully started capture, reset reconnection counter
+        self.reconnectAttempts = 0;
+    }
+}
+
+- (void)attemptReconnection {
+    NSLog(@"Attempting to reconnect to device: %@", self.selectedDevice.name);
+
+    // Refresh device list first in case device came back
+    [self refreshDeviceList];
+
+    // Try to reconnect
+    [self startCaptureWithCurrentDevice];
+}
+
+- (void)refreshDeviceList {
+    NSArray<NetworkDevice *> *previousDevices = self.availableDevices;
+    [self loadAvailableDevices];
+
+    // Log changes if any
+    if (previousDevices.count != self.availableDevices.count) {
+        NSLog(@"Device list changed: %lu -> %lu devices",
+              (unsigned long)previousDevices.count,
+              (unsigned long)self.availableDevices.count);
+    }
+
+    // Check if currently selected device is still available
+    BOOL deviceStillAvailable = NO;
+    for (NetworkDevice *device in self.availableDevices) {
+        if ([device.name isEqualToString:self.selectedDevice.name]) {
+            deviceStillAvailable = YES;
+            break;
+        }
+    }
+
+    if (!deviceStillAvailable && self.selectedDevice) {
+        NSLog(@"Currently selected device '%@' is no longer available", self.selectedDevice.name);
     }
 }
 
@@ -141,6 +221,18 @@ static NSString *const kMapProviderKey = @"MapProvider";
     
     // Reset statistics for new device
     [self.statistics reset];
+}
+
+- (void)updateMenuIfNeeded {
+    // Always update status bar
+    TrafficStats *stats = [self.statistics getCurrentStats];
+    NSString *deviceDisplay = (self.selectedDevice && self.selectedDevice.name) ? [NSString stringWithFormat:@"[%@] ", self.selectedDevice.name] : @"";
+    self.statusItem.button.title = [NSString stringWithFormat:@"📊 %@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
+
+    // If menu is open, update it with live data
+    if (self.menuIsOpen) {
+        [self updateMenu];
+    }
 }
 
 - (void)updateMenu {
@@ -227,6 +319,16 @@ static NSString *const kMapProviderKey = @"MapProvider";
     [self.statusMenu addItem:providerItem];
     
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
+
+    if (self.showMap && self.menuIsOpen) {
+        NSMenuItem *mapItem = [self mapMenuItemIfNeeded];
+        if (mapItem) {
+            [self.statusMenu addItem:mapItem];
+            [self.statusMenu addItem:[NSMenuItem separatorItem]];
+        }
+    } else {
+        [self tearDownMapMenuItem];
+    }
     
     // Total bytes
     NSString *totalBytesStr = [self formatBytes:stats.totalBytes];
@@ -267,7 +369,7 @@ static NSString *const kMapProviderKey = @"MapProvider";
         hostsTitle.enabled = NO;
         [self.statusMenu addItem:hostsTitle];
         
-        NSInteger count = MIN(5, stats.topHosts.count);
+        NSInteger count = MIN(kMaxTopHostsToShow, stats.topHosts.count);
         for (NSInteger i = 0; i < count; i++) {
             HostTraffic *host = stats.topHosts[i];
             NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
@@ -286,7 +388,7 @@ static NSString *const kMapProviderKey = @"MapProvider";
         connectionsTitle.enabled = NO;
         [self.statusMenu addItem:connectionsTitle];
         
-        NSInteger count = MIN(10, stats.topConnections.count);
+        NSInteger count = MIN(kMaxTopConnectionsToShow, stats.topConnections.count);
         for (NSInteger i = 0; i < count; i++) {
             ConnectionTraffic *connection = stats.topConnections[i];
             NSString *connectionItemStr = [NSString stringWithFormat:@"  %@ - %@  %@",
@@ -309,8 +411,8 @@ static NSString *const kMapProviderKey = @"MapProvider";
     NSString *deviceDisplay = (self.selectedDevice && self.selectedDevice.name) ? [NSString stringWithFormat:@"[%@] ", self.selectedDevice.name] : @"";
     self.statusItem.button.title = [NSString stringWithFormat:@"📊 %@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
     
-    if (self.showMap && self.mapWindowController) {
-        [self.mapWindowController updateWithConnections:[self connectionsForMapFromStats:stats]];
+    if (self.showMap && self.menuIsOpen && self.mapMenuView) {
+        [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];
     }
 }
 
@@ -345,15 +447,9 @@ static NSString *const kMapProviderKey = @"MapProvider";
 
 - (void)toggleShowMap:(NSMenuItem *)sender {
     self.showMap = !self.showMap;
-    if (self.showMap) {
-        if (!self.mapWindowController) {
-            self.mapWindowController = [[MapWindowController alloc] init];
-        }
-        self.mapWindowController.providerName = self.mapProviderName;
-        [self.mapWindowController showWindow:self];
-        [self.mapWindowController updateWithConnections:[self connectionsForMapFromStats:[self.statistics getCurrentStats]]];
-    } else if (self.mapWindowController) {
-        [self.mapWindowController close];
+    NSLog(@"Map visualization toggled: %@", self.showMap ? @"ON" : @"OFF");
+    if (!self.showMap) {
+        [self tearDownMapMenuItem];
     }
     [self updateMenu];
 }
@@ -366,13 +462,35 @@ static NSString *const kMapProviderKey = @"MapProvider";
     NSString *providerValue = [provider isEqualToString:@"Custom (UserDefaults)"] ? @"custom" : provider;
     self.mapProviderName = providerValue;
     [[NSUserDefaults standardUserDefaults] setObject:self.mapProviderName forKey:kMapProviderKey];
-    if (self.mapWindowController) {
-        self.mapWindowController.providerName = self.mapProviderName;
+    NSLog(@"Map provider selected: %@", self.mapProviderName);
+    if (self.mapMenuView) {
+        self.mapMenuView.providerName = self.mapProviderName;
         if (self.showMap) {
-            [self.mapWindowController updateWithConnections:[self connectionsForMapFromStats:[self.statistics getCurrentStats]]];
+            [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:[self.statistics getCurrentStats]]];
         }
     }
     [self updateMenu];
+}
+
+- (void)menuWillOpen:(NSMenu *)menu {
+    if (menu != self.statusMenu) {
+        return;
+    }
+    self.menuIsOpen = YES;
+    NSLog(@"Status menu opened");
+    [self updateMenu];
+    if (self.showMap && self.mapMenuView) {
+        [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:[self.statistics getCurrentStats]]];
+    }
+}
+
+- (void)menuDidClose:(NSMenu *)menu {
+    if (menu != self.statusMenu) {
+        return;
+    }
+    self.menuIsOpen = NO;
+    NSLog(@"Status menu closed");
+    [self tearDownMapMenuItem];
 }
 
 - (NSArray<ConnectionTraffic *> *)connectionsForMapFromStats:(TrafficStats *)stats {
@@ -383,12 +501,35 @@ static NSString *const kMapProviderKey = @"MapProvider";
     return connections;
 }
 
+- (NSMenuItem *)mapMenuItemIfNeeded {
+    if (!self.menuIsOpen) {
+        return nil;
+    }
+    if (!self.mapMenuItem) {
+        self.mapMenuView = [[MapMenuView alloc] initWithFrame:NSMakeRect(0, 0, 1.0, kMapMenuViewHeight)];
+        self.mapMenuView.providerName = self.mapProviderName;
+        
+        self.mapMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+        self.mapMenuItem.view = self.mapMenuView;
+        NSLog(@"Map menu view created");
+    }
+    return self.mapMenuItem;
+}
+
+- (void)tearDownMapMenuItem {
+    if (self.mapMenuItem) {
+        self.mapMenuItem.view = nil;
+        self.mapMenuItem = nil;
+        self.mapMenuView = nil;
+        NSLog(@"Map menu view released");
+    }
+}
+
 - (void)applicationWillTerminate:(NSNotification *)notification {
     [self.updateTimer invalidate];
+    [self.deviceRefreshTimer invalidate];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(attemptReconnection) object:nil];
     [self.packetManager stopCapture];
-    if (self.mapWindowController) {
-        [self.mapWindowController close];
-    }
 }
 
 @end

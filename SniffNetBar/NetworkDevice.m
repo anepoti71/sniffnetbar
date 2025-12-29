@@ -28,14 +28,14 @@
 + (NSArray<NetworkDevice *> *)listAllDevices {
     NSMutableArray<NetworkDevice *> *devices = [NSMutableArray array];
     char errbuf[PCAP_ERRBUF_SIZE];
-    
-    // Use pcap to find all devices
+
+    // Use pcap to find all capturable devices (only active/UP interfaces)
     pcap_if_t *allDevs;
     if (pcap_findalldevs(&allDevs, errbuf) == -1) {
         NSLog(@"Error finding devices: %s", errbuf);
         return devices;
     }
-    
+
     // Get interface addresses using getifaddrs
     NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *interfaceAddresses = [NSMutableDictionary dictionary];
     struct ifaddrs *interfaces;
@@ -43,16 +43,16 @@
         struct ifaddrs *interface;
         for (interface = interfaces; interface != NULL; interface = interface->ifa_next) {
             if (interface->ifa_addr == NULL) continue;
-            
+
             NSString *ifName = [NSString stringWithUTF8String:interface->ifa_name];
             if (!ifName) continue;
-            
+
             NSMutableArray<NSString *> *addresses = interfaceAddresses[ifName];
             if (!addresses) {
                 addresses = [NSMutableArray array];
                 interfaceAddresses[ifName] = addresses;
             }
-            
+
             if (interface->ifa_addr->sa_family == AF_INET) {
                 struct sockaddr_in *sin = (struct sockaddr_in *)interface->ifa_addr;
                 char addr[INET_ADDRSTRLEN];
@@ -69,21 +69,21 @@
         }
         freeifaddrs(interfaces);
     }
-    
-    // Iterate through pcap devices
+
+    // Iterate through pcap devices (only capturable interfaces)
     for (pcap_if_t *dev = allDevs; dev != NULL; dev = dev->next) {
         NSString *devName = [NSString stringWithUTF8String:dev->name];
         if (!devName) continue;
-        
+
         NSString *devDesc = dev->description ? [NSString stringWithUTF8String:dev->description] : @"";
         NSArray<NSString *> *addresses = interfaceAddresses[devName] ?: @[];
-        
+
         NetworkDevice *device = [[NetworkDevice alloc] initWithName:devName
                                                          description:devDesc
                                                             addresses:addresses];
         [devices addObject:device];
     }
-    
+
     pcap_freealldevs(allDevs);
     return devices;
 }

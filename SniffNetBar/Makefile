@@ -5,7 +5,7 @@
 
 APP_NAME = SniffNetBar
 BUILD_DIR = build
-FRAMEWORKS = -framework Cocoa -framework SystemConfiguration -framework MapKit -framework CoreLocation
+FRAMEWORKS = -framework Cocoa -framework SystemConfiguration -framework WebKit -framework CoreLocation
 PCAP_LIBS = -lpcap
 CC = clang
 CFLAGS = -std=c11 -Wall -Wextra -O2
@@ -22,7 +22,7 @@ PCAP_LIBDIR = -L/opt/homebrew/lib -L/usr/local/lib
 # Source files (relative to current directory)
 SOURCES = main.m \
           AppDelegate.m \
-          MapWindowController.m \
+          MapMenuView.m \
           PacketCaptureManager.m \
           PacketInfo.m \
           TrafficStatistics.m \

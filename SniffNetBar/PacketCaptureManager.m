@@ -15,6 +15,11 @@
 #import <arpa/inet.h>
 #import <string.h>
 
+// Packet capture configuration constants
+static const int kPcapSnaplen = 65536;        // Maximum bytes to capture per packet
+static const int kPcapPromiscuousMode = 0;   // 0 = non-promiscuous, 1 = promiscuous
+static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
+
 @interface PacketCaptureManager ()
 @property (nonatomic, assign) pcap_t *pcapHandle;
 @property (nonatomic, assign) BOOL isCapturing;
@@ -70,7 +75,7 @@
     }
     
     // Open device for capture
-    self.pcapHandle = pcap_open_live(device, 200, 0, 150, errbuf);
+    self.pcapHandle = pcap_open_live(device, kPcapSnaplen, kPcapPromiscuousMode, kPcapTimeoutMs, errbuf);
     if (self.pcapHandle == NULL) {
         if (error) {
             *error = [NSError errorWithDomain:@"PacketCaptureError"
@@ -125,9 +130,9 @@
                                         capturedLength:header->caplen
                                           actualLength:header->len];
             if (packetInfo && self.onPacketReceived) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    self.onPacketReceived(packetInfo);
-                });
+                // Call callback directly on background thread
+                // TrafficStatistics handles thread safety with its own queue
+                self.onPacketReceived(packetInfo);
             }
         } else if (result == 0) {
             // Timeout

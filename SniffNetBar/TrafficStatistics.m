@@ -14,6 +14,14 @@
 #import <netdb.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 
+// Cache size limits
+static const NSUInteger kMaxHostCacheSize = 1000;
+static const NSUInteger kMaxConnectionCacheSize = 1000;
+static const NSUInteger kMaxHostnameCacheSize = 500;
+static const NSTimeInterval kCacheExpirationTime = 3600; // 1 hour
+static const NSTimeInterval kCleanupInterval = 300; // 5 minutes
+static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
+
 @interface TrafficStatistics ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, HostTraffic *> *hostStats;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, ConnectionTraffic *> *connectionStats;
@@ -23,9 +31,14 @@
 @property (nonatomic, assign) uint64_t totalPackets;
 @property (nonatomic, strong) NSMutableSet<NSString *> *localAddresses;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *hostnameCache;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDate *> *hostnameCacheTimestamps;
 @property (nonatomic, strong) dispatch_queue_t statsQueue;
 @property (nonatomic, strong) NSDate *lastUpdateTime;
 @property (nonatomic, assign) uint64_t lastTotalBytes;
+@property (nonatomic, strong) NSTimer *cleanupTimer;
+@property (nonatomic, strong) NSArray<HostTraffic *> *cachedTopHosts;
+@property (nonatomic, strong) NSArray<ConnectionTraffic *> *cachedTopConnections;
+@property (nonatomic, assign) BOOL statsCacheDirty;
 @end
 
 @implementation TrafficStatistics
@@ -36,11 +49,25 @@
         _hostStats = [NSMutableDictionary dictionary];
         _connectionStats = [NSMutableDictionary dictionary];
         _hostnameCache = [NSMutableDictionary dictionary];
+        _hostnameCacheTimestamps = [NSMutableDictionary dictionary];
         _statsQueue = dispatch_queue_create("com.sniffnetbar.stats", DISPATCH_QUEUE_SERIAL);
         _localAddresses = [NSMutableSet set];
+        _statsCacheDirty = YES;
         [self loadLocalAddresses];
+
+        // Set up periodic cleanup timer
+        __weak typeof(self) weakSelf = self;
+        _cleanupTimer = [NSTimer scheduledTimerWithTimeInterval:kCleanupInterval
+                                                         repeats:YES
+                                                           block:^(NSTimer *timer) {
+            [weakSelf performCacheCleanup];
+        }];
     }
     return self;
+}
+
+- (void)dealloc {
+    [_cleanupTimer invalidate];
 }
 
 - (void)loadLocalAddresses {
@@ -77,6 +104,75 @@
     return [self.localAddresses containsObject:address];
 }
 
+- (void)performCacheCleanup {
+    dispatch_async(self.statsQueue, ^{
+        NSDate *now = [NSDate date];
+
+        // Clean up expired hostname cache entries
+        NSMutableArray<NSString *> *expiredKeys = [NSMutableArray array];
+        for (NSString *key in self.hostnameCacheTimestamps) {
+            NSDate *timestamp = self.hostnameCacheTimestamps[key];
+            if ([now timeIntervalSinceDate:timestamp] > kCacheExpirationTime) {
+                [expiredKeys addObject:key];
+            }
+        }
+        for (NSString *key in expiredKeys) {
+            [self.hostnameCache removeObjectForKey:key];
+            [self.hostnameCacheTimestamps removeObjectForKey:key];
+        }
+
+        // If hostname cache exceeds max size, remove oldest entries
+        if (self.hostnameCache.count > kMaxHostnameCacheSize) {
+            NSArray<NSString *> *sortedKeys = [self.hostnameCacheTimestamps keysSortedByValueUsingComparator:^NSComparisonResult(NSDate *obj1, NSDate *obj2) {
+                return [obj1 compare:obj2];
+            }];
+            NSUInteger toRemove = self.hostnameCache.count - kMaxHostnameCacheSize;
+            for (NSUInteger i = 0; i < toRemove && i < sortedKeys.count; i++) {
+                NSString *key = sortedKeys[i];
+                [self.hostnameCache removeObjectForKey:key];
+                [self.hostnameCacheTimestamps removeObjectForKey:key];
+            }
+        }
+
+        // If host stats exceed max, remove entries with least traffic
+        if (self.hostStats.count > kMaxHostCacheSize) {
+            NSArray<HostTraffic *> *sortedHosts = [self.hostStats.allValues sortedArrayUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
+                if (obj1.bytes < obj2.bytes) return NSOrderedAscending;
+                if (obj1.bytes > obj2.bytes) return NSOrderedDescending;
+                return NSOrderedSame;
+            }];
+            NSUInteger toRemove = self.hostStats.count - kMaxHostCacheSize;
+            for (NSUInteger i = 0; i < toRemove && i < sortedHosts.count; i++) {
+                [self.hostStats removeObjectForKey:sortedHosts[i].address];
+            }
+            self.statsCacheDirty = YES;
+        }
+
+        // If connection stats exceed max, remove entries with least traffic
+        if (self.connectionStats.count > kMaxConnectionCacheSize) {
+            NSArray<ConnectionTraffic *> *sortedConnections = [self.connectionStats.allValues sortedArrayUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
+                if (obj1.bytes < obj2.bytes) return NSOrderedAscending;
+                if (obj1.bytes > obj2.bytes) return NSOrderedDescending;
+                return NSOrderedSame;
+            }];
+            NSUInteger toRemove = self.connectionStats.count - kMaxConnectionCacheSize;
+            for (NSUInteger i = 0; i < toRemove && i < sortedConnections.count; i++) {
+                ConnectionTraffic *conn = sortedConnections[i];
+                NSString *key = [NSString stringWithFormat:@"%@->%@", conn.sourceAddress, conn.destinationAddress];
+                [self.connectionStats removeObjectForKey:key];
+            }
+            self.statsCacheDirty = YES;
+        }
+
+        if (expiredKeys.count > 0 || self.statsCacheDirty) {
+            NSLog(@"Cache cleanup: removed %lu expired hostnames, %lu hosts, %lu connections",
+                  (unsigned long)expiredKeys.count,
+                  (unsigned long)MAX(0, (NSInteger)self.hostStats.count - (NSInteger)kMaxHostCacheSize),
+                  (unsigned long)MAX(0, (NSInteger)self.connectionStats.count - (NSInteger)kMaxConnectionCacheSize));
+        }
+    });
+}
+
 - (void)processPacket:(PacketInfo *)packetInfo {
     if (!packetInfo || packetInfo.totalBytes == 0) {
         return;
@@ -85,7 +181,8 @@
     dispatch_async(self.statsQueue, ^{
         self.totalBytes += packetInfo.totalBytes;
         self.totalPackets++;
-        
+        self.statsCacheDirty = YES;  // Mark cache as dirty
+
         // Determine traffic direction
         BOOL isIncoming = [self isLocalAddress:packetInfo.destinationAddress];
         BOOL isOutgoing = [self isLocalAddress:packetInfo.sourceAddress];
@@ -123,6 +220,7 @@
                         dispatch_async(self.statsQueue, ^{
                             if (hostname) {
                                 self.hostnameCache[remoteAddress] = hostname;
+                                self.hostnameCacheTimestamps[remoteAddress] = [NSDate date];
                                 HostTraffic *h = self.hostStats[remoteAddress];
                                 if (h) {
                                     h.hostname = hostname;
@@ -156,12 +254,19 @@
 }
 
 - (void)performReverseDNSLookup:(NSString *)address completion:(void (^)(NSString *))completion {
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_group_enter(group);
+
+    __block NSString *resultHostname = nil;
+    __block BOOL lookupCompleted = NO;
+
+    // Perform DNS lookup on background queue
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         struct sockaddr_in sin;
         struct sockaddr_in6 sin6;
         struct sockaddr *sa;
         socklen_t salen;
-        
+
         if (inet_pton(AF_INET, address.UTF8String, &sin.sin_addr) == 1) {
             sin.sin_family = AF_INET;
             sa = (struct sockaddr *)&sin;
@@ -171,30 +276,51 @@
             sa = (struct sockaddr *)&sin6;
             salen = sizeof(sin6);
         } else {
-            completion(nil);
+            dispatch_group_leave(group);
             return;
         }
-        
+
         char hostname[NI_MAXHOST];
         int result = getnameinfo(sa, salen, hostname, NI_MAXHOST, NULL, 0, NI_NAMEREQD);
-        if (result == 0) {
-            NSString *hostnameStr = [NSString stringWithUTF8String:hostname];
-            completion(hostnameStr);
-        } else {
-            completion(nil);
+
+        @synchronized(address) {
+            if (!lookupCompleted) {
+                if (result == 0) {
+                    resultHostname = [NSString stringWithUTF8String:hostname];
+                }
+                lookupCompleted = YES;
+                dispatch_group_leave(group);
+            }
         }
+    });
+
+    // Set up timeout
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kDNSLookupTimeout * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @synchronized(address) {
+            if (!lookupCompleted) {
+                lookupCompleted = YES;
+                NSLog(@"DNS lookup timeout for %@", address);
+                dispatch_group_leave(group);
+            }
+        }
+    });
+
+    // Wait for completion or timeout, then call completion handler
+    dispatch_group_notify(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        completion(resultHostname);
     });
 }
 
 - (TrafficStats *)getCurrentStats {
     __block TrafficStats *stats = [[TrafficStats alloc] init];
-    
+
     dispatch_sync(self.statsQueue, ^{
         stats.totalBytes = self.totalBytes;
         stats.incomingBytes = self.incomingBytes;
         stats.outgoingBytes = self.outgoingBytes;
         stats.totalPackets = self.totalPackets;
-        
+
         // Calculate bytes per second
         NSDate *now = [NSDate date];
         if (self.lastUpdateTime) {
@@ -206,29 +332,36 @@
         }
         self.lastUpdateTime = now;
         self.lastTotalBytes = self.totalBytes;
-        
-        // Get top hosts sorted by bytes
-        NSArray<HostTraffic *> *hosts = [self.hostStats.allValues sortedArrayUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
-            if (obj1.bytes > obj2.bytes) {
-                return NSOrderedAscending;
-            } else if (obj1.bytes < obj2.bytes) {
-                return NSOrderedDescending;
-            }
-            return NSOrderedSame;
-        }];
-        stats.topHosts = hosts;
 
-        NSArray<ConnectionTraffic *> *connections = [self.connectionStats.allValues sortedArrayUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
-            if (obj1.bytes > obj2.bytes) {
-                return NSOrderedAscending;
-            } else if (obj1.bytes < obj2.bytes) {
-                return NSOrderedDescending;
-            }
-            return NSOrderedSame;
-        }];
-        stats.topConnections = connections;
+        // Use cached sorted results if available and cache is clean
+        if (self.statsCacheDirty || !self.cachedTopHosts || !self.cachedTopConnections) {
+            // Get top hosts sorted by bytes
+            NSArray<HostTraffic *> *hosts = [self.hostStats.allValues sortedArrayUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
+                if (obj1.bytes > obj2.bytes) {
+                    return NSOrderedAscending;
+                } else if (obj1.bytes < obj2.bytes) {
+                    return NSOrderedDescending;
+                }
+                return NSOrderedSame;
+            }];
+            self.cachedTopHosts = hosts;
+
+            NSArray<ConnectionTraffic *> *connections = [self.connectionStats.allValues sortedArrayUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
+                if (obj1.bytes > obj2.bytes) {
+                    return NSOrderedAscending;
+                } else if (obj1.bytes < obj2.bytes) {
+                    return NSOrderedDescending;
+                }
+                return NSOrderedSame;
+            }];
+            self.cachedTopConnections = connections;
+            self.statsCacheDirty = NO;
+        }
+
+        stats.topHosts = self.cachedTopHosts;
+        stats.topConnections = self.cachedTopConnections;
     });
-    
+
     return stats;
 }
 
@@ -242,6 +375,9 @@
         [self.connectionStats removeAllObjects];
         self.lastUpdateTime = nil;
         self.lastTotalBytes = 0;
+        self.cachedTopHosts = nil;
+        self.cachedTopConnections = nil;
+        self.statsCacheDirty = YES;
     });
 }
 

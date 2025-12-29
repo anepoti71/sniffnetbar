@@ -6,10 +6,34 @@
 //
 
 #import <Cocoa/Cocoa.h>
+#import <execinfo.h>
+#import <signal.h>
+#import <unistd.h>
 #import "AppDelegate.h"
+
+static void handle_signal(int signalNumber) {
+    const char *signalName = strsignal(signalNumber);
+    if (!signalName) {
+        signalName = "UNKNOWN";
+    }
+    dprintf(STDERR_FILENO, "SniffNetBar crash: signal %d (%s)\n", signalNumber, signalName);
+    
+    void *callstack[64];
+    int frames = backtrace(callstack, 64);
+    backtrace_symbols_fd(callstack, frames, STDERR_FILENO);
+    _exit(128 + signalNumber);
+}
+
+static void install_crash_handlers(void) {
+    signal(SIGSEGV, handle_signal);
+    signal(SIGBUS, handle_signal);
+    signal(SIGILL, handle_signal);
+    signal(SIGABRT, handle_signal);
+}
 
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
+        install_crash_handlers();
         NSApplication *app = [NSApplication sharedApplication];
         AppDelegate *delegate = [[AppDelegate alloc] init];
         app.delegate = delegate;
@@ -17,4 +41,3 @@ int main(int argc, const char * argv[]) {
         return 0;
     }
 }
-

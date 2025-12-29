@@ -1,14 +1,14 @@
 //
-//  MapWindowController.h
+//  MapMenuView.h
 //  SniffNetBar
 //
-//  Map visualization for geolocated connections
+//  Map visualization embedded in the menu
 //
 
 #import <Cocoa/Cocoa.h>
 #import "TrafficStatistics.h"
 
-@interface MapWindowController : NSWindowController
+@interface MapMenuView : NSView
 
 @property (nonatomic, copy) NSString *providerName;
 
