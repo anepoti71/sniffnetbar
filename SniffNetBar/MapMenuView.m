@@ -304,20 +304,42 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         return;
     }
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    // Get public IP coordinate for local IP fallback
+    CLLocationCoordinate2D publicCoord = kCLLocationCoordinate2DInvalid;
+    if (self.publicIPCoordinate) {
+        [self.publicIPCoordinate getValue:&publicCoord];
+    }
+
     NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
     NSInteger maxLines = MIN(10, self.lastConnections.count);
     for (NSInteger i = 0; i < maxLines; i++) {
         ConnectionTraffic *connection = self.lastConnections[i];
+
+        // Get source location (use public IP for local addresses)
         NSDictionary *src = self.locationCache[connection.sourceAddress];
+        BOOL srcIsLocal = ![self shouldGeolocateIPAddress:connection.sourceAddress];
+        if (!src && srcIsLocal && CLLocationCoordinate2DIsValid(publicCoord)) {
+            src = @{@"lat": @(publicCoord.latitude), @"lon": @(publicCoord.longitude)};
+        }
+
+        // Get destination location (use public IP for local addresses)
         NSDictionary *dst = self.locationCache[connection.destinationAddress];
+        BOOL dstIsLocal = ![self shouldGeolocateIPAddress:connection.destinationAddress];
+        if (!dst && dstIsLocal && CLLocationCoordinate2DIsValid(publicCoord)) {
+            dst = @{@"lat": @(publicCoord.latitude), @"lon": @(publicCoord.longitude)};
+        }
+
+        // Skip if we still don't have both locations
         if (!src || !dst) {
             continue;
         }
+
         CLLocationCoordinate2D srcCoord = CLLocationCoordinate2DMake([src[@"lat"] doubleValue], [src[@"lon"] doubleValue]);
         CLLocationCoordinate2D dstCoord = CLLocationCoordinate2DMake([dst[@"lat"] doubleValue], [dst[@"lon"] doubleValue]);
         if (!CLLocationCoordinate2DIsValid(srcCoord) || !CLLocationCoordinate2DIsValid(dstCoord)) {
             continue;
         }
+
         NSString *lineTitle = [NSString stringWithFormat:@"%@ → %@ (%@)",
                                connection.sourceAddress,
                                connection.destinationAddress,
@@ -328,12 +350,18 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
                            @"dstLon": @(dstCoord.longitude),
                            @"title": lineTitle}];
     }
+    NSLog(@"MapMenuView: created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)self.lastConnections.count);
+    if (lines.count > 0) {
+        NSLog(@"MapMenuView: First line example: %@", lines[0]);
+    }
+
     NSData *lineData = [NSJSONSerialization dataWithJSONObject:lines options:0 error:&jsonError];
     if (!lineData) {
         NSLog(@"MapMenuView JSON encode error (lines): %@", jsonError.localizedDescription);
         return;
     }
     NSString *lineJson = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
+    NSLog(@"MapMenuView: Line JSON being sent: %@", lineJson);
     NSString *script = [NSString stringWithFormat:@"window.SniffNetBar && window.SniffNetBar.setMarkers(%@, %@);", json, lineJson];
     [self.webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
         if (error) {
@@ -364,11 +392,14 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
     "var lat=(1-t)*(1-t)*lat1+2*(1-t)*t*cx+t*t*lat2;"
     "var lon=(1-t)*(1-t)*lon1+2*(1-t)*t*cy+t*t*lon2;pts.push([lat,lon]);}return pts;}"
     "function setMarkers(points,connections){clearMarkers();clearLines();var bounds=[];"
+    "console.log('setMarkers called with',points?points.length:0,'points and',connections?connections.length:0,'connections');"
     "if(points){points.forEach(function(p){if(typeof p.lat!=='number'||typeof p.lon!=='number'){return;}"
     "var m=L.marker([p.lat,p.lon]);if(p.title){m.bindPopup(p.title);}m.addTo(map);markers.push(m);bounds.push([p.lat,p.lon]);});}"
-    "if(connections){connections.forEach(function(c){if(typeof c.srcLat!=='number'||typeof c.srcLon!=='number'||typeof c.dstLat!=='number'||typeof c.dstLon!=='number'){return;}"
-    "var line=L.polyline(arcPoints({lat:c.srcLat,lon:c.srcLon},{lat:c.dstLat,lon:c.dstLon}),{color:'#ff7a18',weight:2,opacity:0.8});"
-    "if(c.title){line.bindPopup(c.title);}line.addTo(map);lines.push(line);bounds.push([c.srcLat,c.srcLon]);bounds.push([c.dstLat,c.dstLon]);});}"
+    "if(connections){console.log('Processing connections:',connections);connections.forEach(function(c){"
+    "console.log('Connection:',c);if(typeof c.srcLat!=='number'||typeof c.srcLon!=='number'||typeof c.dstLat!=='number'||typeof c.dstLon!=='number'){console.log('Invalid coords, skipping');return;}"
+    "var arcPts=arcPoints({lat:c.srcLat,lon:c.srcLon},{lat:c.dstLat,lon:c.dstLon});console.log('Arc points:',arcPts.length);"
+    "var line=L.polyline(arcPts,{color:'#ff7a18',weight:3,opacity:0.9});"
+    "if(c.title){line.bindPopup(c.title);}line.addTo(map);lines.push(line);console.log('Line added to map');bounds.push([c.srcLat,c.srcLon]);bounds.push([c.dstLat,c.dstLon]);});}"
     "if(bounds.length>0){map.fitBounds(bounds,{padding:[20,20],maxZoom:6});}}"
     "function zoomIn(){map.zoomIn();}"
     "function zoomOut(){map.zoomOut();}"
