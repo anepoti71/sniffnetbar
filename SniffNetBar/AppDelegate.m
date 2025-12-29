@@ -48,7 +48,22 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     // Create status item
     NSStatusBar *statusBar = [NSStatusBar systemStatusBar];
     self.statusItem = [statusBar statusItemWithLength:NSVariableStatusItemLength];
-    self.statusItem.button.title = @"📊";
+    NSImage *statusImage = [NSImage imageNamed:@"icon_macos"];
+    if (!statusImage) {
+        NSString *iconPath = [[NSBundle mainBundle] pathForResource:@"icon_macos" ofType:@"png"];
+        statusImage = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
+    }
+    if (statusImage) {
+        CGFloat targetSize = statusBar.thickness - 2.0;
+        statusImage.size = NSMakeSize(targetSize, targetSize);
+        statusImage.template = NO;
+        self.statusItem.button.image = statusImage;
+        self.statusItem.button.imageScaling = NSImageScaleProportionallyDown;
+        self.statusItem.button.title = @"";
+    } else {
+        NSLog(@"Status icon not found in bundle resources.");
+        self.statusItem.button.title = @"📊";
+    }
     self.statusItem.button.target = self;
     self.statusItem.button.action = @selector(statusItemClicked:);
     [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
@@ -227,7 +242,11 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     // Always update status bar
     TrafficStats *stats = [self.statistics getCurrentStats];
     NSString *deviceDisplay = (self.selectedDevice && self.selectedDevice.name) ? [NSString stringWithFormat:@"[%@] ", self.selectedDevice.name] : @"";
-    self.statusItem.button.title = [NSString stringWithFormat:@"📊 %@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
+    if (self.statusItem.button.image) {
+        self.statusItem.button.title = [NSString stringWithFormat:@"%@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
+    } else {
+        self.statusItem.button.title = [NSString stringWithFormat:@"📊 %@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
+    }
 
     // If menu is open, update it with live data
     if (self.menuIsOpen) {

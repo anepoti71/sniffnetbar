@@ -5,6 +5,12 @@
 
 APP_NAME = SniffNetBar
 BUILD_DIR = build
+APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
+CONTENTS_DIR = $(APP_BUNDLE)/Contents
+MACOS_DIR = $(CONTENTS_DIR)/MacOS
+RESOURCES_DIR = $(CONTENTS_DIR)/Resources
+INFO_PLIST_SRC = Info.plist
+ICON_SRC = ../resources/logos/raw/icon_macos.png
 FRAMEWORKS = -framework Cocoa -framework SystemConfiguration -framework WebKit -framework CoreLocation
 PCAP_LIBS = -lpcap
 CC = clang
@@ -31,9 +37,13 @@ SOURCES = main.m \
 OBJECTS = $(SOURCES:%.m=$(BUILD_DIR)/%.o)
 
 # Targets
-all: $(BUILD_DIR)/$(APP_NAME)
+all: $(APP_BUNDLE)
 
-$(BUILD_DIR)/$(APP_NAME): $(OBJECTS) | $(BUILD_DIR)
+$(APP_BUNDLE): $(MACOS_DIR)/$(APP_NAME) $(INFO_PLIST_SRC) | $(RESOURCES_DIR)
+	@cp $(INFO_PLIST_SRC) $(CONTENTS_DIR)/Info.plist
+	@cp $(ICON_SRC) $(RESOURCES_DIR)/icon_macos.png
+
+$(MACOS_DIR)/$(APP_NAME): $(OBJECTS) | $(MACOS_DIR)
 	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(OBJECTS) -o $@ $(FRAMEWORKS) $(PCAP_LIBDIR) $(PCAP_LIBS)
 
 $(BUILD_DIR)/%.o: %.m | $(BUILD_DIR)
@@ -43,20 +53,26 @@ $(BUILD_DIR)/%.o: %.m | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+$(MACOS_DIR):
+	mkdir -p $(MACOS_DIR)
+
+$(RESOURCES_DIR):
+	mkdir -p $(RESOURCES_DIR)
+
 clean:
 	rm -rf $(BUILD_DIR)
 
-install: $(BUILD_DIR)/$(APP_NAME)
+install: $(APP_BUNDLE)
 	@echo "Installing $(APP_NAME)..."
 	@mkdir -p ~/Applications
-	@cp $(BUILD_DIR)/$(APP_NAME) ~/Applications/
-	@echo "Installed to ~/Applications/$(APP_NAME)"
+	@cp -R $(APP_BUNDLE) ~/Applications/
+	@echo "Installed to ~/Applications/$(APP_NAME).app"
 	@echo ""
 	@echo "Note: This application requires root privileges to capture packets."
-	@echo "You may need to run it with: sudo ~/Applications/$(APP_NAME)"
+	@echo "You may need to run it with: sudo ~/Applications/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)"
 
-run: $(BUILD_DIR)/$(APP_NAME)
+run: $(APP_BUNDLE)
 	@echo "Running $(APP_NAME) (requires sudo)..."
-	sudo $(BUILD_DIR)/$(APP_NAME)
+	sudo $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 
 .PHONY: all clean install run
