@@ -43,5 +43,41 @@
 	<integer>3</integer>
 	<key>ConnectionLineOpacity</key>
 	<real>0.5</real>
+
+	<!-- Threat Intelligence Configuration -->
+	<key>ThreatIntelCacheSize</key>
+	<integer>1000</integer>
+	<key>ThreatIntelCacheTTL</key>
+	<real>3600.0</real>
+
+	<!-- VirusTotal Provider Configuration -->
+	<key>VirusTotalEnabled</key>
+	<true/>
+	<key>VirusTotalAPIURL</key>
+	<string>https://www.virustotal.com/api/v3</string>
+	<key>VirusTotalAPIKey</key>
+	<string>YOUR_API_KEY_HERE</string>
+	<key>VirusTotalTimeout</key>
+	<real>10.0</real>
+	<key>VirusTotalMaxRequestsPerMin</key>
+	<integer>4</integer>
+	<key>VirusTotalTTL</key>
+	<real>86400.0</real>
+
+	<!-- AbuseIPDB Provider Configuration -->
+	<key>AbuseIPDBEnabled</key>
+	<true/>
+	<key>AbuseIPDBAPIURL</key>
+	<string>https://api.abuseipdb.com/api/v2</string>
+	<key>AbuseIPDBAPIKey</key>
+	<string>YOUR_API_KEY_HERE</string>
+	<key>AbuseIPDBTimeout</key>
+	<real>10.0</real>
+	<key>AbuseIPDBMaxRequestsPerMin</key>
+	<integer>60</integer>
+	<key>AbuseIPDBTTL</key>
+	<real>86400.0</real>
+	<key>AbuseIPDBMaxAgeInDays</key>
+	<integer>90</integer>
 </dict>
 </plist>

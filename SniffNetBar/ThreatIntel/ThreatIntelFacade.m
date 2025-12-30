@@ -6,6 +6,7 @@
 #import "ThreatIntelFacade.h"
 #import "ThreatIntelCache.h"
 #import "ConfigurationManager.h"
+#import <arpa/inet.h>
 
 @interface ThreatIntelFacade ()
 @property (nonatomic, strong) NSMutableArray<id<ThreatIntelProvider>> *providers;
@@ -49,7 +50,17 @@
 }
 
 - (void)enrichIP:(NSString *)ipAddress completion:(TIEnrichmentCompletion)completion {
-    TIIndicator *indicator = [TIIndicator indicatorWithIP:ipAddress];
+    TIIndicatorType type = TIIndicatorTypeIPv4;
+    if (![self isValidIPAddress:ipAddress detectedType:&type]) {
+        if (completion) {
+            NSError *error = [NSError errorWithDomain:TIErrorDomain
+                                                 code:TIErrorCodeUnsupportedIndicatorType
+                                             userInfo:@{NSLocalizedDescriptionKey: @"Invalid IP address"}];
+            completion(nil, error);
+        }
+        return;
+    }
+    TIIndicator *indicator = [[TIIndicator alloc] initWithType:type value:ipAddress];
     [self enrichIndicator:indicator completion:completion];
 }
 
@@ -70,14 +81,20 @@
     @synchronized(self.inFlightRequests) {
         NSMutableArray *callbacks = self.inFlightRequests[key];
         if (callbacks) {
-            // Already in flight, add callback
-            [callbacks addObject:[completion copy]];
+            // Already in flight, add callback if provided
+            if (completion) {
+                [callbacks addObject:[completion copy]];
+            }
             SNBLog(@"ThreatIntelFacade: Coalescing request for %@", indicator.value);
             return;
         }
 
         // Start new request
-        self.inFlightRequests[key] = [NSMutableArray arrayWithObject:[completion copy]];
+        NSMutableArray *newCallbacks = [NSMutableArray array];
+        if (completion) {
+            [newCallbacks addObject:[completion copy]];
+        }
+        self.inFlightRequests[key] = newCallbacks;
     }
 
     // Execute enrichment
@@ -103,6 +120,7 @@
     NSMutableArray<TIResult *> *results = [NSMutableArray array];
     NSMutableArray<NSError *> *errors = [NSMutableArray array];
     __block NSInteger cacheHits = 0;
+    __block BOOL timedOut = NO;
 
     for (id<ThreatIntelProvider> provider in applicableProviders) {
         dispatch_group_enter(group);
@@ -122,14 +140,18 @@
         // Query provider
         [provider enrichIndicator:indicator completion:^(TIResult *result, NSError *error) {
             if (result) {
-                @synchronized(results) {
-                    [results addObject:result];
-                }
-                // Cache result
+                // Cache result even if this request times out to help future queries.
                 [self.cache setResult:result];
+                @synchronized(results) {
+                    if (!timedOut) {
+                        [results addObject:result];
+                    }
+                }
             } else if (error) {
-                @synchronized(errors) {
-                    [errors addObject:error];
+                @synchronized(results) {
+                    if (!timedOut) {
+                        [errors addObject:error];
+                    }
                 }
             }
             dispatch_group_leave(group);
@@ -138,15 +160,27 @@
 
     // Wait for all providers (with timeout)
     dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC));
-    dispatch_group_wait(group, timeout);
+    BOOL didTimeout = dispatch_group_wait(group, timeout) != 0;
+    if (didTimeout) {
+        @synchronized(results) {
+            timedOut = YES;
+        }
+    }
+
+    NSArray<TIResult *> *resultsSnapshot = nil;
+    NSArray<NSError *> *errorsSnapshot = nil;
+    @synchronized(results) {
+        resultsSnapshot = [results copy];
+        errorsSnapshot = [errors copy];
+    }
 
     // Calculate scoring
-    TIScoringResult *scoringResult = [self calculateScoringForResults:results indicator:indicator];
+    TIScoringResult *scoringResult = [self calculateScoringForResults:resultsSnapshot indicator:indicator];
 
     // Build response
     TIEnrichmentResponse *response = [[TIEnrichmentResponse alloc] init];
     response.indicator = indicator;
-    response.providerResults = [results copy];
+    response.providerResults = resultsSnapshot;
     response.scoringResult = scoringResult;
     response.duration = [[NSDate date] timeIntervalSinceDate:startTime];
     response.cacheHits = cacheHits;
@@ -155,7 +189,14 @@
            indicator.value, (unsigned long)results.count, (long)cacheHits,
            (long)scoringResult.finalScore, [scoringResult verdictString]);
 
-    [self completeEnrichmentForKey:key response:response error:nil];
+    NSError *finalError = nil;
+    if (didTimeout) {
+        finalError = [self errorTimeoutWithProviderErrors:errorsSnapshot];
+    } else if (resultsSnapshot.count == 0 && errorsSnapshot.count > 0) {
+        finalError = [self errorProvidersFailedWithErrors:errorsSnapshot];
+    }
+
+    [self completeEnrichmentForKey:key response:response error:finalError];
 }
 
 - (void)completeEnrichmentForKey:(NSString *)key
@@ -218,11 +259,12 @@
 
         // Category bonuses
         for (NSString *category in result.verdict.categories) {
-            if ([category containsString:@"malware"] || [category containsString:@"trojan"]) {
+            NSString *categoryLower = [category lowercaseString];
+            if ([categoryLower containsString:@"malware"] || [categoryLower containsString:@"trojan"]) {
                 score += 15;
-            } else if ([category containsString:@"phishing"] || [category containsString:@"scam"]) {
+            } else if ([categoryLower containsString:@"phishing"] || [categoryLower containsString:@"scam"]) {
                 score += 10;
-            } else if ([category containsString:@"botnet"] || [category containsString:@"c2"]) {
+            } else if ([categoryLower containsString:@"botnet"] || [categoryLower containsString:@"c2"]) {
                 score += 15;
             }
         }
@@ -329,13 +371,13 @@
     dispatch_group_t group = dispatch_group_create();
     NSMutableArray<TIEnrichmentResponse *> *responses = [NSMutableArray arrayWithCapacity:indicators.count];
 
-    for (TIIndicator *indicator in indicators) {
+    for (NSUInteger index = 0; index < indicators.count; index++) {
+        TIIndicator *indicator = indicators[index];
         dispatch_group_enter(group);
         [responses addObject:[NSNull null]]; // Placeholder
 
         [self enrichIndicator:indicator completion:^(TIEnrichmentResponse *response, NSError *error) {
-            NSUInteger index = [indicators indexOfObject:indicator];
-            if (index != NSNotFound && response) {
+            if (response) {
                 @synchronized(responses) {
                     responses[index] = response;
                 }
@@ -381,6 +423,46 @@
     return [NSError errorWithDomain:TIErrorDomain
                                code:TIErrorCodeProviderUnavailable
                            userInfo:@{NSLocalizedDescriptionKey: @"No providers available for indicator type"}];
+}
+
+- (NSError *)errorTimeoutWithProviderErrors:(NSArray<NSError *> *)errors {
+    NSMutableDictionary *userInfo = [NSMutableDictionary dictionary];
+    userInfo[NSLocalizedDescriptionKey] = @"Threat intelligence request timed out";
+    userInfo[@"partialResults"] = @YES;
+    if (errors.count > 0) {
+        userInfo[@"providerErrors"] = errors;
+    }
+    return [NSError errorWithDomain:TIErrorDomain code:TIErrorCodeTimeout userInfo:userInfo];
+}
+
+- (NSError *)errorProvidersFailedWithErrors:(NSArray<NSError *> *)errors {
+    NSMutableDictionary *userInfo = [NSMutableDictionary dictionary];
+    userInfo[NSLocalizedDescriptionKey] = @"All threat intelligence providers failed";
+    if (errors.count > 0) {
+        userInfo[@"providerErrors"] = errors;
+    }
+    return [NSError errorWithDomain:TIErrorDomain code:TIErrorCodeNetworkError userInfo:userInfo];
+}
+
+- (BOOL)isValidIPAddress:(NSString *)ip detectedType:(TIIndicatorType *)detectedType {
+    if (ip.length == 0) {
+        return NO;
+    }
+    struct in_addr ipv4;
+    if (inet_pton(AF_INET, ip.UTF8String, &ipv4) == 1) {
+        if (detectedType) {
+            *detectedType = TIIndicatorTypeIPv4;
+        }
+        return YES;
+    }
+    struct in6_addr ipv6;
+    if (inet_pton(AF_INET6, ip.UTF8String, &ipv6) == 1) {
+        if (detectedType) {
+            *detectedType = TIIndicatorTypeIPv6;
+        }
+        return YES;
+    }
+    return NO;
 }
 
 - (void)shutdown {

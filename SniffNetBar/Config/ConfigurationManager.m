@@ -168,4 +168,85 @@
     return value ? [value doubleValue] : 0.9;
 }
 
+#pragma mark - Threat Intelligence Configuration
+
+- (NSUInteger)threatIntelCacheSize {
+    NSNumber *value = self.configuration[@"ThreatIntelCacheSize"];
+    return value ? [value unsignedIntegerValue] : 1000;
+}
+
+- (NSTimeInterval)threatIntelCacheTTL {
+    NSNumber *value = self.configuration[@"ThreatIntelCacheTTL"];
+    return value ? [value doubleValue] : 3600.0;
+}
+
+#pragma mark - VirusTotal Provider Configuration
+
+- (BOOL)virusTotalEnabled {
+    NSNumber *value = self.configuration[@"VirusTotalEnabled"];
+    return value ? [value boolValue] : NO;
+}
+
+- (NSString *)virusTotalAPIURL {
+    NSString *value = self.configuration[@"VirusTotalAPIURL"];
+    return value.length > 0 ? value : @"https://www.virustotal.com/api/v3";
+}
+
+- (NSString *)virusTotalAPIKey {
+    NSString *value = self.configuration[@"VirusTotalAPIKey"];
+    return value.length > 0 ? value : @"";
+}
+
+- (NSTimeInterval)virusTotalTimeout {
+    NSNumber *value = self.configuration[@"VirusTotalTimeout"];
+    return value ? [value doubleValue] : 10.0;
+}
+
+- (NSInteger)virusTotalMaxRequestsPerMin {
+    NSNumber *value = self.configuration[@"VirusTotalMaxRequestsPerMin"];
+    return value ? [value integerValue] : 4;
+}
+
+- (NSTimeInterval)virusTotalTTL {
+    NSNumber *value = self.configuration[@"VirusTotalTTL"];
+    return value ? [value doubleValue] : 86400.0;
+}
+
+#pragma mark - AbuseIPDB Provider Configuration
+
+- (BOOL)abuseIPDBEnabled {
+    NSNumber *value = self.configuration[@"AbuseIPDBEnabled"];
+    return value ? [value boolValue] : NO;
+}
+
+- (NSString *)abuseIPDBAPIURL {
+    NSString *value = self.configuration[@"AbuseIPDBAPIURL"];
+    return value.length > 0 ? value : @"https://api.abuseipdb.com/api/v2";
+}
+
+- (NSString *)abuseIPDBAPIKey {
+    NSString *value = self.configuration[@"AbuseIPDBAPIKey"];
+    return value.length > 0 ? value : @"";
+}
+
+- (NSTimeInterval)abuseIPDBTimeout {
+    NSNumber *value = self.configuration[@"AbuseIPDBTimeout"];
+    return value ? [value doubleValue] : 10.0;
+}
+
+- (NSInteger)abuseIPDBMaxRequestsPerMin {
+    NSNumber *value = self.configuration[@"AbuseIPDBMaxRequestsPerMin"];
+    return value ? [value integerValue] : 60;
+}
+
+- (NSTimeInterval)abuseIPDBTTL {
+    NSNumber *value = self.configuration[@"AbuseIPDBTTL"];
+    return value ? [value doubleValue] : 86400.0;
+}
+
+- (NSInteger)abuseIPDBMaxAgeInDays {
+    NSNumber *value = self.configuration[@"AbuseIPDBMaxAgeInDays"];
+    return value ? [value integerValue] : 90;
+}
+
 @end

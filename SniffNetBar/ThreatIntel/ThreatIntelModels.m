@@ -135,7 +135,7 @@ NSString *const TIErrorDomain = @"com.sniffnetbar.threatintel";
 - (NSColor *)verdictColor {
     switch (_verdict) {
         case TIThreatVerdictClean:
-            return [NSColor systemGreenColor];
+            return [NSColor  systemTealColor];
         case TIThreatVerdictSuspicious:
             return [NSColor systemOrangeColor];
         case TIThreatVerdictMalicious:

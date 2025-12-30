@@ -261,10 +261,13 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 
 - (void)performReverseDNSLookup:(NSString *)address completion:(void (^)(NSString *))completion {
     // Get or create a dedicated lock object for this address
-    NSObject *lock = self.dnsLookupLocks[address];
-    if (!lock) {
-        lock = [[NSObject alloc] init];
-        self.dnsLookupLocks[address] = lock;
+    NSObject *lock = nil;
+    @synchronized(self.dnsLookupLocks) {
+        lock = self.dnsLookupLocks[address];
+        if (!lock) {
+            lock = [[NSObject alloc] init];
+            self.dnsLookupLocks[address] = lock;
+        }
     }
 
     dispatch_group_t group = dispatch_group_create();
@@ -322,6 +325,11 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
     // Wait for completion or timeout, then call completion handler
     dispatch_group_notify(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         completion(resultHostname);
+        @synchronized(self.dnsLookupLocks) {
+            if (self.dnsLookupLocks[address] == lock) {
+                [self.dnsLookupLocks removeObjectForKey:address];
+            }
+        }
     });
 }
 

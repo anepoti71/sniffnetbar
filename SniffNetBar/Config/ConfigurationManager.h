@@ -44,6 +44,27 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) NSInteger connectionLineWeight;
 @property (nonatomic, readonly) CGFloat connectionLineOpacity;
 
+// Threat Intelligence Configuration
+@property (nonatomic, readonly) NSUInteger threatIntelCacheSize;
+@property (nonatomic, readonly) NSTimeInterval threatIntelCacheTTL;
+
+// VirusTotal Provider Configuration
+@property (nonatomic, readonly) BOOL virusTotalEnabled;
+@property (nonatomic, readonly) NSString *virusTotalAPIURL;
+@property (nonatomic, readonly) NSString *virusTotalAPIKey;
+@property (nonatomic, readonly) NSTimeInterval virusTotalTimeout;
+@property (nonatomic, readonly) NSInteger virusTotalMaxRequestsPerMin;
+@property (nonatomic, readonly) NSTimeInterval virusTotalTTL;
+
+// AbuseIPDB Provider Configuration
+@property (nonatomic, readonly) BOOL abuseIPDBEnabled;
+@property (nonatomic, readonly) NSString *abuseIPDBAPIURL;
+@property (nonatomic, readonly) NSString *abuseIPDBAPIKey;
+@property (nonatomic, readonly) NSTimeInterval abuseIPDBTimeout;
+@property (nonatomic, readonly) NSInteger abuseIPDBMaxRequestsPerMin;
+@property (nonatomic, readonly) NSTimeInterval abuseIPDBTTL;
+@property (nonatomic, readonly) NSInteger abuseIPDBMaxAgeInDays;
+
 /**
  * Reload configuration from the plist file
  * Useful if the configuration file is modified at runtime

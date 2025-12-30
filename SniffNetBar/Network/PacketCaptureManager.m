@@ -19,6 +19,8 @@
 static const int kPcapSnaplen = 65536;        // Maximum bytes to capture per packet
 static const int kPcapPromiscuousMode = 0;   // 0 = non-promiscuous, 1 = promiscuous
 static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
+static const useconds_t kCaptureIdleSleepUs = 10000; // 10ms backoff on timeout
+static void *kCaptureQueueKey = &kCaptureQueueKey;
 
 @interface PacketCaptureManager ()
 @property (nonatomic, assign) pcap_t *pcapHandle;
@@ -33,6 +35,7 @@ static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
     self = [super init];
     if (self) {
         _captureQueue = dispatch_queue_create("com.sniffnetbar.capture", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_set_specific(_captureQueue, kCaptureQueueKey, kCaptureQueueKey, NULL);
         _pcapHandle = NULL;
         _isCapturing = NO;
     }
@@ -44,9 +47,7 @@ static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
 }
 
 - (BOOL)startCaptureWithError:(NSError **)error {
-    char errbuf[PCAP_ERRBUF_SIZE];
-    char *defaultDevice = pcap_lookupdev(errbuf);
-    NSString *deviceName = defaultDevice ? [NSString stringWithUTF8String:defaultDevice] : nil;
+    NSString *deviceName = [self defaultDeviceNameWithError:error];
     return [self startCaptureWithDeviceName:deviceName error:error];
 }
 
@@ -62,16 +63,11 @@ static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
     if (deviceName && deviceName.length > 0) {
         device = [deviceName UTF8String];
     } else {
-        // Find default network interface
-        device = pcap_lookupdev(errbuf);
-        if (device == NULL) {
-            if (error) {
-                *error = [NSError errorWithDomain:@"PacketCaptureError"
-                                             code:1
-                                         userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:errbuf]}];
-            }
+        NSString *fallbackName = [self defaultDeviceNameWithError:error];
+        if (!fallbackName) {
             return NO;
         }
+        device = [fallbackName UTF8String];
     }
     
     // Open device for capture
@@ -111,8 +107,17 @@ static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
     
     if (self.pcapHandle) {
         pcap_breakloop(self.pcapHandle);
-        pcap_close(self.pcapHandle);
-        self.pcapHandle = NULL;
+        void (^closeHandle)(void) = ^{
+            if (self.pcapHandle) {
+                pcap_close(self.pcapHandle);
+                self.pcapHandle = NULL;
+            }
+        };
+        if (dispatch_get_specific(kCaptureQueueKey)) {
+            closeHandle();
+        } else {
+            dispatch_sync(self.captureQueue, closeHandle);
+        }
     }
 }
 
@@ -136,6 +141,7 @@ static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
             }
         } else if (result == 0) {
             // Timeout
+            usleep(kCaptureIdleSleepUs);
             continue;
         } else if (result == -1) {
             // Error
@@ -264,6 +270,25 @@ static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
     }
     
     return info;
+}
+
+- (NSString *)defaultDeviceNameWithError:(NSError **)error {
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_if_t *allDevs = NULL;
+    if (pcap_findalldevs(&allDevs, errbuf) == -1 || !allDevs) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"PacketCaptureError"
+                                         code:1
+                                     userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:errbuf]}];
+        }
+        return nil;
+    }
+    NSString *deviceName = nil;
+    if (allDevs->name) {
+        deviceName = [NSString stringWithUTF8String:allDevs->name];
+    }
+    pcap_freealldevs(allDevs);
+    return deviceName;
 }
 
 @end

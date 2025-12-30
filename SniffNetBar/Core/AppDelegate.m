@@ -14,6 +14,8 @@
 #import "ThreatIntelFacade.h"
 #import "ThreatIntelProvider.h"
 #import "ThreatIntelModels.h"
+#import "VirusTotalProvider.h"
+#import "AbuseIPDBProvider.h"
 
 static NSString *const kSelectedDeviceKey = @"SelectedNetworkDevice";
 static NSString *const kMapProviderKey = @"MapProvider";
@@ -35,6 +37,10 @@ static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
 @property (nonatomic, strong) NSTimer *deviceRefreshTimer;
 @property (nonatomic, assign) NSUInteger reconnectAttempts;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, TIEnrichmentResponse *> *threatIntelResults;
+
+// Setup methods
+- (void)setupThreatIntelligence;
+
 @end
 
 @implementation AppDelegate
@@ -122,6 +128,79 @@ static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
     return item;
 }
 
+#pragma mark - Threat Intelligence Setup
+
+- (void)setupThreatIntelligence {
+    ConfigurationManager *config = [ConfigurationManager sharedManager];
+
+    // Initialize threat intelligence facade
+    self.threatIntel = [ThreatIntelFacade sharedInstance];
+    self.threatIntelResults = [NSMutableDictionary dictionary];
+
+    // Restore threat intel enabled state
+    BOOL threatIntelEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:kThreatIntelEnabledKey];
+    self.threatIntel.enabled = threatIntelEnabled;
+
+    /* Configure test provider for demonstration
+    TISimpleProvider *testProvider = [[TISimpleProvider alloc] initWithName:@"test"];
+    [testProvider configureWithAPIKey:nil timeout:2.0 maxRequestsPerMin:60 completion:nil];
+    [testProvider addMaliciousIndicator:@"1.2.3.4" type:TIIndicatorTypeIPv4 confidence:85 categories:@[@"malware", @"botnet"]];
+    [testProvider addMaliciousIndicator:@"8.8.4.4" type:TIIndicatorTypeIPv4 confidence:60 categories:@[@"suspicious"]];
+    [self.threatIntel addProvider:testProvider];
+    */   
+
+    // Configure VirusTotal provider if enabled
+    if (config.virusTotalEnabled && config.virusTotalAPIKey.length > 0) {
+        VirusTotalProvider *vtProvider = [[VirusTotalProvider alloc] initWithTTL:config.virusTotalTTL
+                                                                      negativeTTL:3600.0];
+        [vtProvider configureWithBaseURL:config.virusTotalAPIURL
+                                  APIKey:config.virusTotalAPIKey
+                                 timeout:config.virusTotalTimeout
+                       maxRequestsPerMin:config.virusTotalMaxRequestsPerMin
+                              completion:^(NSError *error) {
+            if (error) {
+                NSLog(@"[AppDelegate] Failed to configure VirusTotal: %@", error.localizedDescription);
+            } else {
+                SNBLog(@"VirusTotal provider configured successfully");
+            }
+        }];
+        [self.threatIntel addProvider:vtProvider];
+        SNBLog(@"VirusTotal provider added");
+    } else {
+        SNBLog(@"VirusTotal provider disabled (enabled: %@, has key: %@)",
+               config.virusTotalEnabled ? @"YES" : @"NO",
+               config.virusTotalAPIKey.length > 0 ? @"YES" : @"NO");
+    }
+
+    // Configure AbuseIPDB provider if enabled
+    if (config.abuseIPDBEnabled && config.abuseIPDBAPIKey.length > 0) {
+        AbuseIPDBProvider *abuseProvider = [[AbuseIPDBProvider alloc] initWithTTL:config.abuseIPDBTTL
+                                                                       negativeTTL:3600.0
+                                                                     maxAgeInDays:config.abuseIPDBMaxAgeInDays];
+        [abuseProvider configureWithBaseURL:config.abuseIPDBAPIURL
+                                     APIKey:config.abuseIPDBAPIKey
+                                    timeout:config.abuseIPDBTimeout
+                          maxRequestsPerMin:config.abuseIPDBMaxRequestsPerMin
+                                 completion:^(NSError *error) {
+            if (error) {
+                NSLog(@"[AppDelegate] Failed to configure AbuseIPDB: %@", error.localizedDescription);
+            } else {
+                SNBLog(@"AbuseIPDB provider configured successfully");
+            }
+        }];
+        [self.threatIntel addProvider:abuseProvider];
+        SNBLog(@"AbuseIPDB provider added");
+    } else {
+        SNBLog(@"AbuseIPDB provider disabled (enabled: %@, has key: %@)",
+               config.abuseIPDBEnabled ? @"YES" : @"NO",
+               config.abuseIPDBAPIKey.length > 0 ? @"YES" : @"NO");
+    }
+
+    SNBLog(@"Threat Intelligence initialized (enabled: %@)", threatIntelEnabled ? @"YES" : @"NO");
+}
+
+#pragma mark - Application Lifecycle
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     // Create status item
     NSStatusBar *statusBar = [NSStatusBar systemStatusBar];
@@ -161,22 +240,7 @@ static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
     self.mapProviderName = savedProvider.length > 0 ? savedProvider : config.defaultMapProvider;
 
     // Initialize threat intelligence
-    self.threatIntel = [ThreatIntelFacade sharedInstance];
-    self.threatIntelResults = [NSMutableDictionary dictionary];
-
-    // Restore threat intel enabled state
-    BOOL threatIntelEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:kThreatIntelEnabledKey];
-    self.threatIntel.enabled = threatIntelEnabled;
-
-    // Configure with a simple test provider
-    TISimpleProvider *testProvider = [[TISimpleProvider alloc] initWithName:@"test"];
-    [testProvider configureWithAPIKey:nil timeout:2.0 maxRequestsPerMin:60 completion:nil];
-    // Add some test malicious IPs for demonstration
-    [testProvider addMaliciousIndicator:@"1.2.3.4" type:TIIndicatorTypeIPv4 confidence:85 categories:@[@"malware", @"botnet"]];
-    [testProvider addMaliciousIndicator:@"8.8.4.4" type:TIIndicatorTypeIPv4 confidence:60 categories:@[@"suspicious"]];
-    [self.threatIntel addProvider:testProvider];
-
-    SNBLog(@"Threat Intelligence initialized (enabled: %@)", threatIntelEnabled ? @"YES" : @"NO");
+    [self setupThreatIntelligence];
 
     // Set up callback for packet updates
     __weak typeof(self) weakSelf = self;
@@ -437,7 +501,7 @@ static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
     toggleThreatIntel.state = self.threatIntel.isEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [self.statusMenu addItem:toggleThreatIntel];
 
-    NSMenuItem *providerItem = [[NSMenuItem alloc] initWithTitle:@"Map Provider" action:nil keyEquivalent:@""];
+    NSMenuItem *providerItem = [[NSMenuItem alloc] initWithTitle:@"GeoLocation Provider" action:nil keyEquivalent:@""];
     NSMenu *providerSubmenu = [[NSMenu alloc] init];
     NSArray<NSString *> *providers = @[@"ip-api.com", @"ipinfo.io", @"Custom (UserDefaults)"];
     for (NSString *provider in providers) {

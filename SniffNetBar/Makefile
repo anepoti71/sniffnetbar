@@ -26,7 +26,7 @@ PCAP_INCLUDE = -I/opt/homebrew/include -I/usr/local/include
 PCAP_LIBDIR = -L/opt/homebrew/lib -L/usr/local/lib
 
 # Include paths for organized folders
-PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IUI
+PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IThreatIntel/Providers -IUI -ITests -ITests/ThreatIntel -ITests/ThreatIntel/Providers
 
 # Source files (organized by domain)
 CORE_SOURCES = Core/main.m Core/AppDelegate.m
@@ -36,14 +36,29 @@ NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m
 THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/ThreatIntelProvider.m \
                       ThreatIntel/ThreatIntelCache.m \
-                      ThreatIntel/ThreatIntelFacade.m
+                      ThreatIntel/ThreatIntelFacade.m \
+                      ThreatIntel/Providers/VirusTotalProvider.m \
+                      ThreatIntel/Providers/AbuseIPDBProvider.m
 UI_SOURCES = UI/MapMenuView.m
+
+# Test sources
+TEST_SOURCES = Tests/ThreatIntel/ThreatIntelCacheTests.m \
+               Tests/ThreatIntel/ThreatIntelModelsTests.m \
+               Tests/ThreatIntel/ThreatIntelFacadeTests.m \
+               Tests/ThreatIntel/MockThreatIntelProvider.m \
+               Tests/ThreatIntel/Providers/ProviderTests.m
 
 # All sources
 SOURCES = $(CORE_SOURCES) $(CONFIG_SOURCES) $(MODEL_SOURCES) \
           $(NETWORK_SOURCES) $(THREATINTEL_SOURCES) $(UI_SOURCES)
 
+# Library sources (for tests - exclude main.m and AppDelegate.m)
+LIB_SOURCES = $(CONFIG_SOURCES) $(MODEL_SOURCES) $(NETWORK_SOURCES) \
+              $(THREATINTEL_SOURCES) UI/MapMenuView.m
+
 OBJECTS = $(SOURCES:%.m=$(BUILD_DIR)/%.o)
+LIB_OBJECTS = $(LIB_SOURCES:%.m=$(BUILD_DIR)/%.o)
+TEST_OBJECTS = $(TEST_SOURCES:%.m=$(BUILD_DIR)/%.o)
 
 # Targets
 all: $(APP_BUNDLE)
@@ -85,4 +100,22 @@ run: $(APP_BUNDLE)
 	@echo "Running $(APP_NAME) (requires sudo)..."
 	sudo $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 
-.PHONY: all clean install run
+# Test targets
+TEST_BUNDLE = $(BUILD_DIR)/Tests.xctest
+TEST_BUNDLE_DIR = $(TEST_BUNDLE)/Contents/MacOS
+TEST_FRAMEWORKS = -framework XCTest
+
+test: $(BUILD_DIR)/TestRunner
+	@echo "Running tests..."
+	$(BUILD_DIR)/TestRunner
+
+$(BUILD_DIR)/TestRunner: $(LIB_OBJECTS) $(TEST_OBJECTS) | $(BUILD_DIR)
+	@echo "Building test runner..."
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(LIB_OBJECTS) $(TEST_OBJECTS) -o $@ \
+		$(FRAMEWORKS) $(TEST_FRAMEWORKS) $(PCAP_LIBDIR) $(PCAP_LIBS) \
+		-Xlinker -bundle_loader -Xlinker /Applications/Xcode.app/Contents/Developer/usr/bin/xctest
+
+test-build: $(LIB_OBJECTS) $(TEST_OBJECTS)
+	@echo "Test files compiled successfully"
+
+.PHONY: all clean install run test test-build
