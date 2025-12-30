@@ -148,21 +148,24 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
 
         // Check if we're at rate limit
         if (self.requestTimestamps.count >= self.maxRequestsPerMin) {
-            // Calculate how long to wait
             NSDate *oldestTimestamp = self.requestTimestamps.firstObject;
             NSTimeInterval waitTime = 60.0 - [[NSDate date] timeIntervalSinceDate:oldestTimestamp];
 
             if (waitTime > 0) {
                 NSLog(@"[VirusTotalProvider] Rate limit reached, waiting %.1f seconds", waitTime);
-                [NSThread sleepForTimeInterval:waitTime];
-                [self.requestTimestamps removeObjectAtIndex:0];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(waitTime * NSEC_PER_SEC)),
+                               self.rateLimitQueue, ^{
+                    if (self.requestTimestamps.count > 0) {
+                        [self.requestTimestamps removeObjectAtIndex:0];
+                    }
+                    [self.requestTimestamps addObject:[NSDate date]];
+                    if (block) block();
+                });
+                return;
             }
         }
 
-        // Record this request
         [self.requestTimestamps addObject:[NSDate date]];
-
-        // Execute the block
         if (block) block();
     });
 }

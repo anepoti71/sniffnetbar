@@ -7,6 +7,7 @@
 
 #import "TrafficStatistics.h"
 #import "PacketInfo.h"
+#import "ExpiringCache.h"
 #import <sys/socket.h>
 #import <netinet/in.h>
 #import <arpa/inet.h>
@@ -30,8 +31,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 @property (nonatomic, assign) uint64_t outgoingBytes;
 @property (nonatomic, assign) uint64_t totalPackets;
 @property (nonatomic, strong) NSMutableSet<NSString *> *localAddresses;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *hostnameCache;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDate *> *hostnameCacheTimestamps;
+@property (nonatomic, strong) SNBExpiringCache<NSString *, NSString *> *hostnameCache;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *dnsLookupLocks;
 @property (nonatomic, strong) dispatch_queue_t statsQueue;
 @property (nonatomic, strong) NSDate *lastUpdateTime;
@@ -49,8 +49,8 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
     if (self) {
         _hostStats = [NSMutableDictionary dictionary];
         _connectionStats = [NSMutableDictionary dictionary];
-        _hostnameCache = [NSMutableDictionary dictionary];
-        _hostnameCacheTimestamps = [NSMutableDictionary dictionary];
+        _hostnameCache = [[SNBExpiringCache alloc] initWithMaxSize:kMaxHostnameCacheSize
+                                                expirationInterval:kCacheExpirationTime];
         _dnsLookupLocks = [NSMutableDictionary dictionary];
         _statsQueue = dispatch_queue_create("com.sniffnetbar.stats", DISPATCH_QUEUE_SERIAL);
         _localAddresses = [NSMutableSet set];
@@ -108,33 +108,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 
 - (void)performCacheCleanup {
     dispatch_async(self.statsQueue, ^{
-        NSDate *now = [NSDate date];
-
-        // Clean up expired hostname cache entries
-        NSMutableArray<NSString *> *expiredKeys = [NSMutableArray array];
-        for (NSString *key in self.hostnameCacheTimestamps) {
-            NSDate *timestamp = self.hostnameCacheTimestamps[key];
-            if ([now timeIntervalSinceDate:timestamp] > kCacheExpirationTime) {
-                [expiredKeys addObject:key];
-            }
-        }
-        for (NSString *key in expiredKeys) {
-            [self.hostnameCache removeObjectForKey:key];
-            [self.hostnameCacheTimestamps removeObjectForKey:key];
-        }
-
-        // If hostname cache exceeds max size, remove oldest entries
-        if (self.hostnameCache.count > kMaxHostnameCacheSize) {
-            NSArray<NSString *> *sortedKeys = [self.hostnameCacheTimestamps keysSortedByValueUsingComparator:^NSComparisonResult(NSDate *obj1, NSDate *obj2) {
-                return [obj1 compare:obj2];
-            }];
-            NSUInteger toRemove = self.hostnameCache.count - kMaxHostnameCacheSize;
-            for (NSUInteger i = 0; i < toRemove && i < sortedKeys.count; i++) {
-                NSString *key = sortedKeys[i];
-                [self.hostnameCache removeObjectForKey:key];
-                [self.hostnameCacheTimestamps removeObjectForKey:key];
-            }
-        }
+        NSUInteger expiredCount = [self.hostnameCache cleanupAndReturnExpiredCount];
 
         // If host stats exceed max, remove entries with least traffic
         if (self.hostStats.count > kMaxHostCacheSize) {
@@ -166,9 +140,9 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
             self.statsCacheDirty = YES;
         }
 
-        if (expiredKeys.count > 0 || self.statsCacheDirty) {
+        if (expiredCount > 0 || self.statsCacheDirty) {
             NSLog(@"Cache cleanup: removed %lu expired hostnames, %lu hosts, %lu connections",
-                  (unsigned long)expiredKeys.count,
+                  (unsigned long)expiredCount,
                   (unsigned long)MAX(0, (NSInteger)self.hostStats.count - (NSInteger)kMaxHostCacheSize),
                   (unsigned long)MAX(0, (NSInteger)self.connectionStats.count - (NSInteger)kMaxConnectionCacheSize));
         }
@@ -215,7 +189,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
             if (!host) {
                 host = [[HostTraffic alloc] init];
                 host.address = remoteAddress;
-                host.hostname = self.hostnameCache[remoteAddress];
+                host.hostname = [self.hostnameCache objectForKey:remoteAddress];
                 if (!host.hostname) {
                     // Perform reverse DNS lookup asynchronously
                     __weak typeof(self) weakSelf = self;
@@ -225,8 +199,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 
                         dispatch_async(strongSelf.statsQueue, ^{
                             if (hostname) {
-                                strongSelf.hostnameCache[remoteAddress] = hostname;
-                                strongSelf.hostnameCacheTimestamps[remoteAddress] = [NSDate date];
+                                [strongSelf.hostnameCache setObject:hostname forKey:remoteAddress];
                                 HostTraffic *h = strongSelf.hostStats[remoteAddress];
                                 if (h) {
                                     h.hostname = hostname;

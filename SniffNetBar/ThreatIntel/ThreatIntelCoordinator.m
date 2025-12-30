@@ -7,10 +7,9 @@
 #import "ConfigurationManager.h"
 #import "ThreatIntelFacade.h"
 #import "ThreatIntelModels.h"
+#import "UserDefaultsKeys.h"
 #import "VirusTotalProvider.h"
 #import "AbuseIPDBProvider.h"
-
-static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
 
 @interface ThreatIntelCoordinator ()
 @property (nonatomic, strong) ConfigurationManager *configuration;
@@ -32,7 +31,7 @@ static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
 }
 
 - (void)loadEnabledState {
-    BOOL enabled = [[NSUserDefaults standardUserDefaults] boolForKey:kThreatIntelEnabledKey];
+    BOOL enabled = [[NSUserDefaults standardUserDefaults] boolForKey:SNBUserDefaultsKeyThreatIntelEnabled];
     self.facade.enabled = enabled;
     _enabled = enabled;
 }
@@ -95,7 +94,7 @@ static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
 - (void)setEnabled:(BOOL)enabled {
     _enabled = enabled;
     self.facade.enabled = enabled;
-    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kThreatIntelEnabledKey];
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:SNBUserDefaultsKeyThreatIntelEnabled];
     [[NSUserDefaults standardUserDefaults] synchronize];
 
     SNBLog(@"Threat Intelligence %@", enabled ? @"ENABLED" : @"DISABLED");

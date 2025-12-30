@@ -6,21 +6,18 @@
 //
 
 #import "MapMenuView.h"
+#import "ByteFormatter.h"
 #import "ConfigurationManager.h"
+#import "ExpiringCache.h"
+#import "UserDefaultsKeys.h"
 #import <WebKit/WebKit.h>
 #import <CoreLocation/CoreLocation.h>
-
-static NSString *const kMapProviderKey = @"MapProvider";
-static NSString *const kMapProviderURLTemplateKey = @"MapProviderURLTemplate";
-static NSString *const kMapProviderLatKey = @"MapProviderLatKey";
-static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
 
 @interface MapMenuView () <WKNavigationDelegate>
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) NSButton *zoomInButton;
 @property (nonatomic, strong) NSButton *zoomOutButton;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *locationCache;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDate *> *locationCacheTimestamps;
+@property (nonatomic, strong) SNBExpiringCache<NSString *, NSDictionary *> *locationCache;
 @property (nonatomic, strong) NSMutableSet<NSString *> *inFlightLookups;
 @property (nonatomic, strong) NSMutableSet<NSString *> *failedLookups;
 @property (nonatomic, strong) NSURLSession *session;
@@ -58,13 +55,13 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
         [_zoomInButton setNeedsDisplay:YES];
         [_zoomOutButton setNeedsDisplay:YES];
 
-        _locationCache = [NSMutableDictionary dictionary];
-        _locationCacheTimestamps = [NSMutableDictionary dictionary];
+        _locationCache = [[SNBExpiringCache alloc] initWithMaxSize:[ConfigurationManager sharedManager].maxLocationCacheSize
+                                                expirationInterval:[ConfigurationManager sharedManager].locationCacheExpirationTime];
         _inFlightLookups = [NSMutableSet set];
         _failedLookups = [NSMutableSet set];
         _session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
 
-        NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderKey];
+        NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProvider];
         NSString *defaultProvider = [ConfigurationManager sharedManager].defaultMapProvider;
         _providerName = savedProvider.length > 0 ? savedProvider : defaultProvider;
 
@@ -90,43 +87,6 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
     _providerName = [providerName copy];
     [self.failedLookups removeAllObjects];
     [self.inFlightLookups removeAllObjects];
-}
-
-- (void)cleanupLocationCache {
-    NSDate *now = [NSDate date];
-    NSMutableArray<NSString *> *expiredKeys = [NSMutableArray array];
-    ConfigurationManager *config = [ConfigurationManager sharedManager];
-
-    // Find expired entries
-    for (NSString *key in self.locationCacheTimestamps) {
-        NSDate *timestamp = self.locationCacheTimestamps[key];
-        if ([now timeIntervalSinceDate:timestamp] > config.locationCacheExpirationTime) {
-            [expiredKeys addObject:key];
-        }
-    }
-
-    // Remove expired entries
-    for (NSString *key in expiredKeys) {
-        [self.locationCache removeObjectForKey:key];
-        [self.locationCacheTimestamps removeObjectForKey:key];
-    }
-
-    // If still over limit, remove oldest entries
-    if (self.locationCache.count > config.maxLocationCacheSize) {
-        NSArray<NSString *> *sortedKeys = [self.locationCacheTimestamps keysSortedByValueUsingComparator:^NSComparisonResult(NSDate *obj1, NSDate *obj2) {
-            return [obj1 compare:obj2];
-        }];
-        NSUInteger toRemove = self.locationCache.count - config.maxLocationCacheSize;
-        for (NSUInteger i = 0; i < toRemove && i < sortedKeys.count; i++) {
-            NSString *key = sortedKeys[i];
-            [self.locationCache removeObjectForKey:key];
-            [self.locationCacheTimestamps removeObjectForKey:key];
-        }
-    }
-
-    if (expiredKeys.count > 0) {
-        SNBLog(@"MapMenuView: cleaned up %lu expired location cache entries", (unsigned long)expiredKeys.count);
-    }
 }
 
 - (void)viewDidMoveToWindow {
@@ -158,7 +118,11 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
         return;
     }
 
-    [self cleanupLocationCache];  // Periodic cache cleanup
+    NSUInteger expiredCount = [self.locationCache cleanupAndReturnExpiredCount];
+    if (expiredCount > 0) {
+        SNBLog(@"MapMenuView: cleaned up %lu expired location cache entries",
+               (unsigned long)expiredCount);
+    }
     SNBLog(@"MapMenuView update: %lu connections", (unsigned long)connections.count);
     [self updatePublicIPLocationIfNeeded];
     if (connections.count == 0) {
@@ -190,14 +154,14 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
     
     BOOL canLookup = YES;
     if ([self.providerName isEqualToString:@"custom"]) {
-        NSString *template = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderURLTemplateKey];
+        NSString *template = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProviderURLTemplate];
         if (template.length == 0) {
             canLookup = NO;
         }
     }
     
     for (NSString *ip in targetIps) {
-        if (self.locationCache[ip]) {
+        if ([self.locationCache objectForKey:ip]) {
             continue;
         }
         if (!canLookup || [self.inFlightLookups containsObject:ip] || [self.failedLookups containsObject:ip]) {
@@ -281,7 +245,7 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
     
     NSMutableArray<NSDictionary *> *points = [NSMutableArray array];
     for (NSString *ip in self.lastTargetIPs) {
-        NSDictionary *value = self.locationCache[ip];
+        NSDictionary *value = [self.locationCache objectForKey:ip];
         if (!value) {
             continue;
         }
@@ -328,14 +292,14 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
         ConnectionTraffic *connection = self.lastConnections[i];
 
         // Get source location (use public IP for local addresses)
-        NSDictionary *src = self.locationCache[connection.sourceAddress];
+        NSDictionary *src = [self.locationCache objectForKey:connection.sourceAddress];
         BOOL srcIsLocal = ![self shouldGeolocateIPAddress:connection.sourceAddress];
         if (!src && srcIsLocal && CLLocationCoordinate2DIsValid(publicCoord)) {
             src = @{@"lat": @(publicCoord.latitude), @"lon": @(publicCoord.longitude)};
         }
 
         // Get destination location (use public IP for local addresses)
-        NSDictionary *dst = self.locationCache[connection.destinationAddress];
+        NSDictionary *dst = [self.locationCache objectForKey:connection.destinationAddress];
         BOOL dstIsLocal = ![self shouldGeolocateIPAddress:connection.destinationAddress];
         if (!dst && dstIsLocal && CLLocationCoordinate2DIsValid(publicCoord)) {
             dst = @{@"lat": @(publicCoord.latitude), @"lon": @(publicCoord.longitude)};
@@ -355,7 +319,7 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
         NSString *lineTitle = [NSString stringWithFormat:@"%@ → %@ (%@)",
                                connection.sourceAddress,
                                connection.destinationAddress,
-                               [self formatBytes:connection.bytes]];
+                               [SNBByteFormatter stringFromBytes:connection.bytes]];
         [lines addObject:@{@"srcLat": @(srcCoord.latitude),
                            @"srcLon": @(srcCoord.longitude),
                            @"dstLat": @(dstCoord.latitude),
@@ -497,7 +461,7 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
     } else if ([provider isEqualToString:@"ipinfo.io"]) {
         urlString = [NSString stringWithFormat:@"https://ipinfo.io/%@/json", encodedIP];
     } else {
-        NSString *template = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderURLTemplateKey];
+        NSString *template = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProviderURLTemplate];
         if (template.length == 0) {
             completion(kCLLocationCoordinate2DInvalid, NO);
             return;
@@ -590,8 +554,8 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
                 success = YES;
             }
         } else {
-            NSString *latKey = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderLatKey] ?: @"lat";
-            NSString *lonKey = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderLonKey] ?: @"lon";
+            NSString *latKey = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProviderLatKey] ?: @"lat";
+            NSString *lonKey = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProviderLonKey] ?: @"lon";
             id latValue = [dict valueForKeyPath:latKey];
             id lonValue = [dict valueForKeyPath:lonKey];
             if ([latValue respondsToSelector:@selector(doubleValue)] &&
@@ -612,8 +576,7 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
                 payload[@"isp"] = isp;
             }
             dispatch_async(dispatch_get_main_queue(), ^{
-                self.locationCache[ip] = payload;
-                self.locationCacheTimestamps[ip] = [NSDate date];
+                [self.locationCache setObject:payload forKey:ip];
                 completion(CLLocationCoordinate2DMake(lat, lon), YES);
             });
         } else {
@@ -622,18 +585,6 @@ static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
         }
     }];
     [task resume];
-}
-
-- (NSString *)formatBytes:(uint64_t)bytes {
-    if (bytes < 1024) {
-        return [NSString stringWithFormat:@"%llu B", bytes];
-    } else if (bytes < 1024 * 1024) {
-        return [NSString stringWithFormat:@"%.2f KB", bytes / 1024.0];
-    } else if (bytes < 1024 * 1024 * 1024) {
-        return [NSString stringWithFormat:@"%.2f MB", bytes / (1024.0 * 1024.0)];
-    } else {
-        return [NSString stringWithFormat:@"%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0)];
-    }
 }
 
 #pragma mark - WKNavigationDelegate

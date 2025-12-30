@@ -4,13 +4,13 @@
 //
 
 #import "MenuBuilder.h"
+#import "ByteFormatter.h"
 #import "ConfigurationManager.h"
 #import "MapMenuView.h"
 #import "NetworkDevice.h"
 #import "ThreatIntelModels.h"
 #import "TrafficStatistics.h"
-
-static NSString *const kMapProviderKey = @"MapProvider";
+#import "UserDefaultsKeys.h"
 
 @interface MenuBuilder ()
 @property (nonatomic, strong) NSMenu *statusMenu;
@@ -36,7 +36,7 @@ static NSString *const kMapProviderKey = @"MapProvider";
         _showTopConnections = YES;
         _showMap = NO;
 
-        NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderKey];
+        NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProvider];
         _mapProviderName = savedProvider.length > 0 ? savedProvider : configuration.defaultMapProvider;
     }
     return self;
@@ -125,17 +125,6 @@ static NSString *const kMapProviderKey = @"MapProvider";
     return item;
 }
 
-- (NSString *)formatBytes:(uint64_t)bytes {
-    if (bytes < 1024) {
-        return [NSString stringWithFormat:@"%llu B", bytes];
-    } else if (bytes < 1024 * 1024) {
-        return [NSString stringWithFormat:@"%.2f KB", bytes / 1024.0];
-    } else if (bytes < 1024 * 1024 * 1024) {
-        return [NSString stringWithFormat:@"%.2f MB", bytes / (1024.0 * 1024.0)];
-    }
-    return [NSString stringWithFormat:@"%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0)];
-}
-
 - (NSArray<ConnectionTraffic *> *)connectionsForMapFromStats:(TrafficStats *)stats {
     NSArray<ConnectionTraffic *> *connections = stats.topConnections ?: @[];
     if (connections.count > 10) {
@@ -148,7 +137,8 @@ static NSString *const kMapProviderKey = @"MapProvider";
     NSString *deviceDisplay = (selectedDevice && selectedDevice.name)
         ? [NSString stringWithFormat:@"[%@] ", selectedDevice.name]
         : @"";
-    NSString *rateDisplay = [NSString stringWithFormat:@"%@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
+    NSString *rateDisplay = [NSString stringWithFormat:@"%@%@/s", deviceDisplay,
+                             [SNBByteFormatter stringFromBytes:stats.bytesPerSecond]];
     self.statusItem.button.title = rateDisplay;
 }
 
@@ -248,15 +238,15 @@ static NSString *const kMapProviderKey = @"MapProvider";
         [self tearDownMapMenuItem];
     }
 
-    NSString *totalBytesStr = [self formatBytes:stats.totalBytes];
+    NSString *totalBytesStr = [SNBByteFormatter stringFromBytes:stats.totalBytes];
     NSMenuItem *bytesItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Total: %@", totalBytesStr]
                                                        action:nil
                                                 keyEquivalent:@""];
     bytesItem.enabled = NO;
     [self.statusMenu addItem:bytesItem];
 
-    NSString *incomingStr = [self formatBytes:stats.incomingBytes];
-    NSString *outgoingStr = [self formatBytes:stats.outgoingBytes];
+    NSString *incomingStr = [SNBByteFormatter stringFromBytes:stats.incomingBytes];
+    NSString *outgoingStr = [SNBByteFormatter stringFromBytes:stats.outgoingBytes];
     NSMenuItem *incomingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↓ In: %@", incomingStr]
                                                           action:nil
                                                    keyEquivalent:@""];
@@ -287,7 +277,8 @@ static NSString *const kMapProviderKey = @"MapProvider";
             HostTraffic *host = stats.topHosts[i];
             NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
             NSString *hostDisplay = hostName.length > 0 ? [NSString stringWithFormat:@"%@ (%@)", hostName, host.address] : host.address;
-            NSString *hostItemStr = [NSString stringWithFormat:@"  %@ - %@", hostDisplay, [self formatBytes:host.bytes]];
+            NSString *hostItemStr = [NSString stringWithFormat:@"  %@ - %@",
+                                     hostDisplay, [SNBByteFormatter stringFromBytes:host.bytes]];
             NSMenuItem *hostItem = [[NSMenuItem alloc] initWithTitle:hostItemStr action:nil keyEquivalent:@""];
             hostItem.enabled = NO;
             [self.statusMenu addItem:hostItem];
@@ -306,7 +297,7 @@ static NSString *const kMapProviderKey = @"MapProvider";
             NSString *connectionItemStr = [NSString stringWithFormat:@"  %@ - %@  %@",
                                            connection.sourceAddress,
                                            connection.destinationAddress,
-                                           [self formatBytes:connection.bytes]];
+                                           [SNBByteFormatter stringFromBytes:connection.bytes]];
             NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:connectionItemStr action:nil keyEquivalent:@""];
             connectionItem.enabled = NO;
             [self.statusMenu addItem:connectionItem];
@@ -427,7 +418,8 @@ static NSString *const kMapProviderKey = @"MapProvider";
     }
     NSString *providerValue = [providerName isEqualToString:@"Custom (UserDefaults)"] ? @"custom" : providerName;
     self.mapProviderName = providerValue;
-    [[NSUserDefaults standardUserDefaults] setObject:self.mapProviderName forKey:kMapProviderKey];
+    [[NSUserDefaults standardUserDefaults] setObject:self.mapProviderName
+                                              forKey:SNBUserDefaultsKeyMapProvider];
     SNBLog(@"Map provider selected: %@", self.mapProviderName);
     if (self.mapMenuView) {
         self.mapMenuView.providerName = self.mapProviderName;

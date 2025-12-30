@@ -26,11 +26,11 @@ PCAP_INCLUDE = -I/opt/homebrew/include -I/usr/local/include
 PCAP_LIBDIR = -L/opt/homebrew/lib -L/usr/local/lib
 
 # Include paths for organized folders
-PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IThreatIntel/Providers -IUI -ITests -ITests/ThreatIntel -ITests/ThreatIntel/Providers
+PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IThreatIntel/Providers -IUI -IUtils -ITests -ITests/ThreatIntel -ITests/ThreatIntel/Providers
 
 # Source files (organized by domain)
 CORE_SOURCES = Core/main.m Core/AppDelegate.m
-CONFIG_SOURCES = Config/ConfigurationManager.m Config/KeychainManager.m
+CONFIG_SOURCES = Config/ConfigurationManager.m Config/KeychainManager.m Config/UserDefaultsKeys.m
 MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m
 NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m \
                   Network/DeviceManager.m
@@ -42,6 +42,7 @@ THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/Providers/VirusTotalProvider.m \
                       ThreatIntel/Providers/AbuseIPDBProvider.m
 UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m
+UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m
 
 # Test sources
 TEST_SOURCES = Tests/ThreatIntel/ThreatIntelCacheTests.m \
@@ -52,11 +53,11 @@ TEST_SOURCES = Tests/ThreatIntel/ThreatIntelCacheTests.m \
 
 # All sources
 SOURCES = $(CORE_SOURCES) $(CONFIG_SOURCES) $(MODEL_SOURCES) \
-          $(NETWORK_SOURCES) $(THREATINTEL_SOURCES) $(UI_SOURCES)
+          $(NETWORK_SOURCES) $(THREATINTEL_SOURCES) $(UI_SOURCES) $(UTIL_SOURCES)
 
 # Library sources (for tests - exclude main.m and AppDelegate.m)
 LIB_SOURCES = $(CONFIG_SOURCES) $(MODEL_SOURCES) $(NETWORK_SOURCES) \
-              $(THREATINTEL_SOURCES) UI/MapMenuView.m UI/MenuBuilder.m
+              $(THREATINTEL_SOURCES) UI/MapMenuView.m UI/MenuBuilder.m $(UTIL_SOURCES)
 
 OBJECTS = $(SOURCES:%.m=$(BUILD_DIR)/%.o)
 LIB_OBJECTS = $(LIB_SOURCES:%.m=$(BUILD_DIR)/%.o)

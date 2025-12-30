@@ -7,8 +7,7 @@
 #import "ConfigurationManager.h"
 #import "NetworkDevice.h"
 #import "PacketCaptureManager.h"
-
-static NSString *const kSelectedDeviceKey = @"SelectedNetworkDevice";
+#import "UserDefaultsKeys.h"
 
 @interface DeviceManager ()
 @property (nonatomic, strong) ConfigurationManager *configuration;
@@ -39,7 +38,7 @@ static NSString *const kSelectedDeviceKey = @"SelectedNetworkDevice";
 
 - (void)restoreSelectedDevice {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    NSString *savedDeviceName = [defaults stringForKey:kSelectedDeviceKey];
+    NSString *savedDeviceName = [defaults stringForKey:SNBUserDefaultsKeySelectedNetworkDevice];
 
     if (savedDeviceName) {
         for (NetworkDevice *device in self.availableDevices) {
@@ -56,7 +55,7 @@ static NSString *const kSelectedDeviceKey = @"SelectedNetworkDevice";
 - (void)saveSelectedDevice {
     if (self.selectedDevice) {
         NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-        [defaults setObject:self.selectedDevice.name forKey:kSelectedDeviceKey];
+        [defaults setObject:self.selectedDevice.name forKey:SNBUserDefaultsKeySelectedNetworkDevice];
         [defaults synchronize];
     }
 }
