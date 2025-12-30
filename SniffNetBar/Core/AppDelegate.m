@@ -6,24 +6,18 @@
 //
 
 #import "AppDelegate.h"
+#import "ConfigurationManager.h"
 #import "PacketCaptureManager.h"
 #import "TrafficStatistics.h"
 #import "NetworkDevice.h"
 #import "MapMenuView.h"
+#import "ThreatIntelFacade.h"
+#import "ThreatIntelProvider.h"
+#import "ThreatIntelModels.h"
 
 static NSString *const kSelectedDeviceKey = @"SelectedNetworkDevice";
 static NSString *const kMapProviderKey = @"MapProvider";
-
-// UI update configuration
-static const NSTimeInterval kMenuUpdateInterval = 1.0;        // Update UI every second
-static const NSTimeInterval kDeviceListRefreshInterval = 30.0; // Refresh device list every 30 seconds
-static const NSUInteger kMaxTopHostsToShow = 5;               // Number of top hosts in menu
-static const NSUInteger kMaxTopConnectionsToShow = 10;        // Number of top connections in menu
-static const CGFloat kMapMenuViewHeight = 220.0;              // Height of map view in pixels
-
-// Reconnection configuration
-static const NSTimeInterval kReconnectDelay = 5.0;            // Delay before reconnection attempt
-static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconnection attempts
+static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
 
 @interface AppDelegate ()
 @property (nonatomic, strong) PacketCaptureManager *packetManager;
@@ -40,9 +34,93 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
 @property (nonatomic, assign) BOOL menuIsOpen;
 @property (nonatomic, strong) NSTimer *deviceRefreshTimer;
 @property (nonatomic, assign) NSUInteger reconnectAttempts;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, TIEnrichmentResponse *> *threatIntelResults;
 @end
 
 @implementation AppDelegate
+
+- (NSString *)truncatedMenuTitle:(NSString *)title maxWidth:(CGFloat)maxWidth {
+    if (title.length == 0 || maxWidth <= 0) {
+        return title;
+    }
+    NSFont *font = [NSFont menuFontOfSize:0.0];
+    NSDictionary *attributes = @{ NSFontAttributeName: font };
+    CGFloat availableWidth = maxWidth - 60.0;
+    if (availableWidth <= 0) {
+        return title;
+    }
+    if ([title sizeWithAttributes:attributes].width <= availableWidth) {
+        return title;
+    }
+    NSString *ellipsis = @"...";
+    CGFloat ellipsisWidth = [ellipsis sizeWithAttributes:attributes].width;
+    if (ellipsisWidth >= availableWidth) {
+        return ellipsis;
+    }
+    NSUInteger low = 0;
+    NSUInteger high = title.length;
+    while (low < high) {
+        NSUInteger mid = (low + high + 1) / 2;
+        NSString *candidate = [[title substringToIndex:mid] stringByAppendingString:ellipsis];
+        if ([candidate sizeWithAttributes:attributes].width <= availableWidth) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    if (low == 0) {
+        return ellipsis;
+    }
+    NSString *prefix = [title substringToIndex:low];
+    return [prefix stringByAppendingString:ellipsis];
+}
+
+- (void)truncateMenuItemsInMenu:(NSMenu *)menu maxWidth:(CGFloat)maxWidth {
+    if (maxWidth <= 0 || !menu) {
+        return;
+    }
+    for (NSMenuItem *item in menu.itemArray) {
+        if (item.isSeparatorItem) {
+            continue;
+        }
+        if (item.submenu) {
+            [self truncateMenuItemsInMenu:item.submenu maxWidth:maxWidth];
+        }
+        if (item.view || item.title.length == 0) {
+            continue;
+        }
+        item.title = [self truncatedMenuTitle:item.title maxWidth:maxWidth];
+    }
+}
+
+- (NSMenuItem *)fixedWidthTitleItemWithTitle:(NSString *)title width:(CGFloat)width {
+    if (width <= 0) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title ?: @"" action:nil keyEquivalent:@""];
+        item.enabled = NO;
+        return item;
+    }
+
+    NSFont *font = [NSFont menuFontOfSize:0.0];
+    NSTextField *label = [NSTextField labelWithString:title ?: @""];
+    label.font = font;
+    label.alignment = NSTextAlignmentLeft;
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
+    [label sizeToFit];
+
+    CGFloat paddingX = 12.0;
+    CGFloat paddingY = 3.0;
+    CGFloat viewHeight = label.frame.size.height + paddingY * 2.0;
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, viewHeight)];
+
+    CGFloat labelWidth = MAX(0.0, width - paddingX * 2.0);
+    label.frame = NSMakeRect(paddingX, paddingY, labelWidth, label.frame.size.height);
+    [container addSubview:label];
+
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    item.view = container;
+    item.enabled = NO;
+    return item;
+}
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     // Create status item
@@ -61,7 +139,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
         self.statusItem.button.imageScaling = NSImageScaleProportionallyDown;
         self.statusItem.button.title = @"";
     } else {
-        NSLog(@"Status icon not found in bundle resources.");
+        SNBLog(@"Status icon not found in bundle resources.");
         self.statusItem.button.title = @"📊";
     }
     self.statusItem.button.target = self;
@@ -78,45 +156,66 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     self.showTopHosts = YES;
     self.showTopConnections = YES;
     self.showMap = NO;
+    ConfigurationManager *config = [ConfigurationManager sharedManager];
     NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderKey];
-    self.mapProviderName = savedProvider.length > 0 ? savedProvider : @"ipinfo.io";
-    
+    self.mapProviderName = savedProvider.length > 0 ? savedProvider : config.defaultMapProvider;
+
+    // Initialize threat intelligence
+    self.threatIntel = [ThreatIntelFacade sharedInstance];
+    self.threatIntelResults = [NSMutableDictionary dictionary];
+
+    // Restore threat intel enabled state
+    BOOL threatIntelEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:kThreatIntelEnabledKey];
+    self.threatIntel.enabled = threatIntelEnabled;
+
+    // Configure with a simple test provider
+    TISimpleProvider *testProvider = [[TISimpleProvider alloc] initWithName:@"test"];
+    [testProvider configureWithAPIKey:nil timeout:2.0 maxRequestsPerMin:60 completion:nil];
+    // Add some test malicious IPs for demonstration
+    [testProvider addMaliciousIndicator:@"1.2.3.4" type:TIIndicatorTypeIPv4 confidence:85 categories:@[@"malware", @"botnet"]];
+    [testProvider addMaliciousIndicator:@"8.8.4.4" type:TIIndicatorTypeIPv4 confidence:60 categories:@[@"suspicious"]];
+    [self.threatIntel addProvider:testProvider];
+
+    SNBLog(@"Threat Intelligence initialized (enabled: %@)", threatIntelEnabled ? @"YES" : @"NO");
+
     // Set up callback for packet updates
     __weak typeof(self) weakSelf = self;
     self.packetManager.onPacketReceived = ^(PacketInfo *packetInfo) {
         [weakSelf.statistics processPacket:packetInfo];
     };
-    
+
     // Load available devices and restore selected device
     [self loadAvailableDevices];
     [self restoreSelectedDevice];
-    
+
     // Update menu after devices are loaded
     [self updateMenu];
-    
+
     // Start packet capture
     [self startCaptureWithCurrentDevice];
 
     // Set up timer to update UI (use block-based timer to avoid retain cycle)
     // Note: weakSelf already declared above for packet callback
-    self.updateTimer = [NSTimer scheduledTimerWithTimeInterval:kMenuUpdateInterval
-                                                         repeats:YES
-                                                           block:^(NSTimer *timer) {
+    self.updateTimer = [NSTimer timerWithTimeInterval:config.menuUpdateInterval
+                                              repeats:YES
+                                                block:^(NSTimer *timer) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf) {
             [strongSelf updateMenuIfNeeded];
         }
     }];
+    [[NSRunLoop mainRunLoop] addTimer:self.updateTimer forMode:NSRunLoopCommonModes];
 
     // Set up timer to periodically refresh device list
-    self.deviceRefreshTimer = [NSTimer scheduledTimerWithTimeInterval:kDeviceListRefreshInterval
-                                                               repeats:YES
-                                                                 block:^(NSTimer *timer) {
+    self.deviceRefreshTimer = [NSTimer timerWithTimeInterval:config.deviceListRefreshInterval
+                                                     repeats:YES
+                                                       block:^(NSTimer *timer) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf) {
             [strongSelf refreshDeviceList];
         }
     }];
+    [[NSRunLoop mainRunLoop] addTimer:self.deviceRefreshTimer forMode:NSRunLoopCommonModes];
 }
 
 - (void)statusItemClicked:(id)sender {
@@ -132,7 +231,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
 - (void)loadAvailableDevices {
     self.availableDevices = [NetworkDevice listAllDevices];
     if (self.availableDevices.count == 0) {
-        NSLog(@"Warning: No network devices found");
+        SNBLog(@"Warning: No network devices found");
     }
 }
 
@@ -168,30 +267,31 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
 
     // Double-check we have a valid device
     if (!self.selectedDevice || [self.selectedDevice.name isEqualToString:@"(no device)"]) {
-        NSLog(@"Error: No valid network device available for capture");
+        SNBLog(@"Error: No valid network device available for capture");
         self.statusItem.button.title = @"❌ No Device";
         return;
     }
 
     NSError *error;
     if (![self.packetManager startCaptureWithDeviceName:self.selectedDevice.name error:&error]) {
-        NSLog(@"Failed to start packet capture: %@", error.localizedDescription);
+        SNBLog(@"Failed to start packet capture: %@", error.localizedDescription);
         self.statusItem.button.title = @"❌";
 
         // Attempt automatic reconnection
-        if (self.reconnectAttempts < kMaxReconnectAttempts) {
+        ConfigurationManager *config = [ConfigurationManager sharedManager];
+        if (self.reconnectAttempts < config.maxReconnectAttempts) {
             self.reconnectAttempts++;
-            NSLog(@"Scheduling reconnection attempt %lu of %lu in %.0f seconds",
+            SNBLog(@"Scheduling reconnection attempt %lu of %lu in %.0f seconds",
                   (unsigned long)self.reconnectAttempts,
-                  (unsigned long)kMaxReconnectAttempts,
-                  kReconnectDelay);
+                  (unsigned long)config.maxReconnectAttempts,
+                  config.reconnectDelay);
             __weak typeof(self) weakSelf = self;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kReconnectDelay * NSEC_PER_SEC)),
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(config.reconnectDelay * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 [weakSelf attemptReconnection];
             });
         } else {
-            NSLog(@"Maximum reconnection attempts reached. Manual intervention required.");
+            SNBLog(@"Maximum reconnection attempts reached. Manual intervention required.");
         }
     } else {
         // Successfully started capture, reset reconnection counter
@@ -200,7 +300,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
 }
 
 - (void)attemptReconnection {
-    NSLog(@"Attempting to reconnect to device: %@", self.selectedDevice.name);
+    SNBLog(@"Attempting to reconnect to device: %@", self.selectedDevice.name);
 
     // Refresh device list first in case device came back
     [self refreshDeviceList];
@@ -215,7 +315,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
 
     // Log changes if any
     if (previousDevices.count != self.availableDevices.count) {
-        NSLog(@"Device list changed: %lu -> %lu devices",
+        SNBLog(@"Device list changed: %lu -> %lu devices",
               (unsigned long)previousDevices.count,
               (unsigned long)self.availableDevices.count);
     }
@@ -230,7 +330,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     }
 
     if (!deviceStillAvailable && self.selectedDevice) {
-        NSLog(@"Currently selected device '%@' is no longer available", self.selectedDevice.name);
+        SNBLog(@"Currently selected device '%@' is no longer available", self.selectedDevice.name);
     }
 }
 
@@ -269,9 +369,9 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     
     // Display statistics
     TrafficStats *stats = [self.statistics getCurrentStats];
+    ConfigurationManager *config = [ConfigurationManager sharedManager];
     
-    NSMenuItem *titleItem = [[NSMenuItem alloc] initWithTitle:@"Network Traffic" action:nil keyEquivalent:@""];
-    titleItem.enabled = NO;
+    NSMenuItem *titleItem = [self fixedWidthTitleItemWithTitle:@"Network Traffic" width:config.menuFixedWidth];
     [self.statusMenu addItem:titleItem];
     
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
@@ -328,7 +428,15 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     toggleMap.target = self;
     toggleMap.state = self.showMap ? NSControlStateValueOn : NSControlStateValueOff;
     [self.statusMenu addItem:toggleMap];
-    
+
+    // Threat Intelligence toggle
+    NSMenuItem *toggleThreatIntel = [[NSMenuItem alloc] initWithTitle:@"Enable Threat Intelligence"
+                                                               action:@selector(toggleThreatIntel:)
+                                                        keyEquivalent:@""];
+    toggleThreatIntel.target = self;
+    toggleThreatIntel.state = self.threatIntel.isEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [self.statusMenu addItem:toggleThreatIntel];
+
     NSMenuItem *providerItem = [[NSMenuItem alloc] initWithTitle:@"Map Provider" action:nil keyEquivalent:@""];
     NSMenu *providerSubmenu = [[NSMenu alloc] init];
     NSArray<NSString *> *providers = @[@"ip-api.com", @"ipinfo.io", @"Custom (UserDefaults)"];
@@ -397,8 +505,8 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
         NSMenuItem *hostsTitle = [[NSMenuItem alloc] initWithTitle:@"Top Hosts" action:nil keyEquivalent:@""];
         hostsTitle.enabled = NO;
         [self.statusMenu addItem:hostsTitle];
-        
-        NSInteger count = MIN(kMaxTopHostsToShow, stats.topHosts.count);
+
+        NSInteger count = MIN(config.maxTopHostsToShow, stats.topHosts.count);
         for (NSInteger i = 0; i < count; i++) {
             HostTraffic *host = stats.topHosts[i];
             NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
@@ -416,8 +524,8 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
         NSMenuItem *connectionsTitle = [[NSMenuItem alloc] initWithTitle:@"Top Connections" action:nil keyEquivalent:@""];
         connectionsTitle.enabled = NO;
         [self.statusMenu addItem:connectionsTitle];
-        
-        NSInteger count = MIN(kMaxTopConnectionsToShow, stats.topConnections.count);
+
+        NSInteger count = MIN(config.maxTopConnectionsToShow, stats.topConnections.count);
         for (NSInteger i = 0; i < count; i++) {
             ConnectionTraffic *connection = stats.topConnections[i];
             NSString *connectionItemStr = [NSString stringWithFormat:@"  %@ - %@  %@",
@@ -427,9 +535,58 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
             NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:connectionItemStr action:nil keyEquivalent:@""];
             connectionItem.enabled = NO;
             [self.statusMenu addItem:connectionItem];
+
+            // Add threat intel result if enabled and available
+            if (self.threatIntel.isEnabled) {
+                [self enrichAndDisplayThreatIntelForIP:connection.destinationAddress];
+            }
         }
     }
-    
+
+    // Threat Intelligence Results
+    if (self.threatIntel.isEnabled && self.threatIntelResults.count > 0) {
+        [self.statusMenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"Threat Intelligence" action:nil keyEquivalent:@""];
+        threatTitle.enabled = NO;
+        [self.statusMenu addItem:threatTitle];
+
+        // Show cached threat intel results
+        for (NSString *ip in [self.threatIntelResults allKeys]) {
+            TIEnrichmentResponse *response = self.threatIntelResults[ip];
+            if (response.scoringResult) {
+                TIScoringResult *scoring = response.scoringResult;
+                NSString *verdictStr = [scoring verdictString];
+                NSColor *color = [scoring verdictColor];
+
+                // Create attributed string for colored verdict
+                NSString *displayStr = [NSString stringWithFormat:@"  %@: %@ (Score: %ld)",
+                                       ip, verdictStr, (long)scoring.finalScore];
+
+                NSMenuItem *threatItem = [[NSMenuItem alloc] initWithTitle:displayStr
+                                                                   action:nil
+                                                            keyEquivalent:@""];
+                threatItem.enabled = NO;
+
+                // Color the text based on verdict
+                NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:displayStr];
+                [attrString addAttribute:NSForegroundColorAttributeName
+                                   value:color
+                                   range:NSMakeRange(0, displayStr.length)];
+                threatItem.attributedTitle = attrString;
+
+                [self.statusMenu addItem:threatItem];
+            }
+        }
+
+        // Show cache stats
+        NSDictionary *cacheStats = [self.threatIntel cacheStats];
+        NSString *statsStr = [NSString stringWithFormat:@"  Cache: %@ entries (%.1f%% hit rate)",
+                             cacheStats[@"size"], [cacheStats[@"hitRate"] doubleValue] * 100];
+        NSMenuItem *statsItem = [[NSMenuItem alloc] initWithTitle:statsStr action:nil keyEquivalent:@""];
+        statsItem.enabled = NO;
+        [self.statusMenu addItem:statsItem];
+    }
+
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
     
     // Quit item
@@ -440,6 +597,8 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     NSString *deviceDisplay = (self.selectedDevice && self.selectedDevice.name) ? [NSString stringWithFormat:@"[%@] ", self.selectedDevice.name] : @"";
     self.statusItem.button.title = [NSString stringWithFormat:@"%@%@/s", deviceDisplay, [self formatBytes:stats.bytesPerSecond]];
     
+    [self truncateMenuItemsInMenu:self.statusMenu maxWidth:config.menuFixedWidth];
+
     if (self.showMap && self.menuIsOpen && self.mapMenuView) {
         [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];
     }
@@ -476,7 +635,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
 
 - (void)toggleShowMap:(NSMenuItem *)sender {
     self.showMap = !self.showMap;
-    NSLog(@"Map visualization toggled: %@", self.showMap ? @"ON" : @"OFF");
+    SNBLog(@"Map visualization toggled: %@", self.showMap ? @"ON" : @"OFF");
     if (!self.showMap) {
         [self tearDownMapMenuItem];
     }
@@ -491,7 +650,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     NSString *providerValue = [provider isEqualToString:@"Custom (UserDefaults)"] ? @"custom" : provider;
     self.mapProviderName = providerValue;
     [[NSUserDefaults standardUserDefaults] setObject:self.mapProviderName forKey:kMapProviderKey];
-    NSLog(@"Map provider selected: %@", self.mapProviderName);
+    SNBLog(@"Map provider selected: %@", self.mapProviderName);
     if (self.mapMenuView) {
         self.mapMenuView.providerName = self.mapProviderName;
         if (self.showMap) {
@@ -501,12 +660,54 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
     [self updateMenu];
 }
 
+- (void)toggleThreatIntel:(NSMenuItem *)sender {
+    self.threatIntel.enabled = !self.threatIntel.isEnabled;
+    [[NSUserDefaults standardUserDefaults] setBool:self.threatIntel.isEnabled forKey:kThreatIntelEnabledKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    SNBLog(@"Threat Intelligence %@", self.threatIntel.isEnabled ? @"ENABLED" : @"DISABLED");
+
+    if (!self.threatIntel.isEnabled) {
+        // Clear results when disabled
+        [self.threatIntelResults removeAllObjects];
+    }
+
+    [self updateMenu];
+}
+
+- (void)enrichAndDisplayThreatIntelForIP:(NSString *)ipAddress {
+    // Check if we already have a result
+    if (self.threatIntelResults[ipAddress]) {
+        return; // Already have it
+    }
+
+    // Enrich asynchronously
+    [self.threatIntel enrichIP:ipAddress completion:^(TIEnrichmentResponse *response, NSError *error) {
+        if (response && response.scoringResult) {
+            // Store result
+            self.threatIntelResults[ipAddress] = response;
+
+            // Log result
+            TIScoringResult *scoring = response.scoringResult;
+            SNBLog(@"Threat Intel: %@ -> %@ (score: %ld, confidence: %.2f)",
+                   ipAddress, [scoring verdictString], (long)scoring.finalScore, scoring.confidence);
+
+            // Update menu on main thread
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self updateMenu];
+            });
+        } else if (error) {
+            SNBLog(@"Threat Intel error for %@: %@", ipAddress, error.localizedDescription);
+        }
+    }];
+}
+
 - (void)menuWillOpen:(NSMenu *)menu {
     if (menu != self.statusMenu) {
         return;
     }
     self.menuIsOpen = YES;
-    NSLog(@"Status menu opened");
+    SNBLog(@"Status menu opened");
     [self updateMenu];
     if (self.showMap && self.mapMenuView) {
         [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:[self.statistics getCurrentStats]]];
@@ -518,7 +719,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
         return;
     }
     self.menuIsOpen = NO;
-    NSLog(@"Status menu closed");
+    SNBLog(@"Status menu closed");
     [self tearDownMapMenuItem];
 }
 
@@ -535,12 +736,33 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
         return nil;
     }
     if (!self.mapMenuItem) {
-        self.mapMenuView = [[MapMenuView alloc] initWithFrame:NSMakeRect(0, 0, 1.0, kMapMenuViewHeight)];
+        ConfigurationManager *config = [ConfigurationManager sharedManager];
+        self.mapMenuView = [[MapMenuView alloc] initWithFrame:NSMakeRect(0, 0, config.menuFixedWidth, config.mapMenuViewHeight)];
         self.mapMenuView.providerName = self.mapProviderName;
-        
+
+        // Use Auto Layout to enforce fixed size
+        self.mapMenuView.translatesAutoresizingMaskIntoConstraints = NO;
+
         self.mapMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
         self.mapMenuItem.view = self.mapMenuView;
-        NSLog(@"Map menu view created");
+
+        // Add width and height constraints to the view
+        [self.mapMenuView addConstraint:[NSLayoutConstraint constraintWithItem:self.mapMenuView
+                                                                     attribute:NSLayoutAttributeWidth
+                                                                     relatedBy:NSLayoutRelationEqual
+                                                                        toItem:nil
+                                                                     attribute:NSLayoutAttributeNotAnAttribute
+                                                                    multiplier:1.0
+                                                                      constant:config.menuFixedWidth]];
+        [self.mapMenuView addConstraint:[NSLayoutConstraint constraintWithItem:self.mapMenuView
+                                                                     attribute:NSLayoutAttributeHeight
+                                                                     relatedBy:NSLayoutRelationEqual
+                                                                        toItem:nil
+                                                                     attribute:NSLayoutAttributeNotAnAttribute
+                                                                    multiplier:1.0
+                                                                      constant:config.mapMenuViewHeight]];
+
+        SNBLog(@"Map menu view created with constraints: width=%.0f, height=%.0f", config.menuFixedWidth, config.mapMenuViewHeight);
     }
     return self.mapMenuItem;
 }
@@ -550,7 +772,7 @@ static const NSUInteger kMaxReconnectAttempts = 3;            // Maximum reconne
         self.mapMenuItem.view = nil;
         self.mapMenuItem = nil;
         self.mapMenuView = nil;
-        NSLog(@"Map menu view released");
+        SNBLog(@"Map menu view released");
     }
 }
 

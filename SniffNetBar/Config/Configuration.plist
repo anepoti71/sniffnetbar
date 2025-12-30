@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Logging Configuration -->
+	<key>DebugLogging</key>
+	<true/>
+
+	<!-- UI Update Configuration -->
+	<key>MenuUpdateInterval</key>
+	<real>1.0</real>
+	<key>DeviceListRefreshInterval</key>
+	<real>30.0</real>
+	<key>MaxTopHostsToShow</key>
+	<integer>5</integer>
+	<key>MaxTopConnectionsToShow</key>
+	<integer>10</integer>
+	<key>MapMenuViewHeight</key>
+	<real>220.0</real>
+	<key>MenuFixedWidth</key>
+	<real>420.0</real>
+
+	<!-- Reconnection Configuration -->
+	<key>ReconnectDelay</key>
+	<real>5.0</real>
+	<key>MaxReconnectAttempts</key>
+	<integer>3</integer>
+
+	<!-- Location Cache Configuration -->
+	<key>MaxLocationCacheSize</key>
+	<integer>500</integer>
+	<key>LocationCacheExpirationTime</key>
+	<real>7200</real>
+
+	<!-- Map Configuration -->
+	<key>DefaultMapProvider</key>
+	<string>ipinfo.io</string>
+	<key>MaxConnectionLinesToShow</key>
+	<integer>10</integer>
+	<key>ConnectionLineColor</key>
+	<string>#ff7a18</string>
+	<key>ConnectionLineWeight</key>
+	<integer>3</integer>
+	<key>ConnectionLineOpacity</key>
+	<real>0.5</real>
+</dict>
+</plist>

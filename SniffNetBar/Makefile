@@ -25,14 +25,23 @@ SDK_FLAGS = -isysroot $(SDKROOT) -mmacosx-version-min=10.13
 PCAP_INCLUDE = -I/opt/homebrew/include -I/usr/local/include
 PCAP_LIBDIR = -L/opt/homebrew/lib -L/usr/local/lib
 
-# Source files (relative to current directory)
-SOURCES = main.m \
-          AppDelegate.m \
-          MapMenuView.m \
-          PacketCaptureManager.m \
-          PacketInfo.m \
-          TrafficStatistics.m \
-          NetworkDevice.m
+# Include paths for organized folders
+PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IUI
+
+# Source files (organized by domain)
+CORE_SOURCES = Core/main.m Core/AppDelegate.m
+CONFIG_SOURCES = Config/ConfigurationManager.m
+MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m
+NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m
+THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
+                      ThreatIntel/ThreatIntelProvider.m \
+                      ThreatIntel/ThreatIntelCache.m \
+                      ThreatIntel/ThreatIntelFacade.m
+UI_SOURCES = UI/MapMenuView.m
+
+# All sources
+SOURCES = $(CORE_SOURCES) $(CONFIG_SOURCES) $(MODEL_SOURCES) \
+          $(NETWORK_SOURCES) $(THREATINTEL_SOURCES) $(UI_SOURCES)
 
 OBJECTS = $(SOURCES:%.m=$(BUILD_DIR)/%.o)
 
@@ -41,6 +50,7 @@ all: $(APP_BUNDLE)
 
 $(APP_BUNDLE): $(MACOS_DIR)/$(APP_NAME) $(INFO_PLIST_SRC) | $(RESOURCES_DIR)
 	@cp $(INFO_PLIST_SRC) $(CONTENTS_DIR)/Info.plist
+	@cp Config/Configuration.plist $(RESOURCES_DIR)/Configuration.plist
 	@cp $(ICON_SRC) $(RESOURCES_DIR)/icon_macos.png
 
 $(MACOS_DIR)/$(APP_NAME): $(OBJECTS) | $(MACOS_DIR)
@@ -48,7 +58,7 @@ $(MACOS_DIR)/$(APP_NAME): $(OBJECTS) | $(MACOS_DIR)
 
 $(BUILD_DIR)/%.o: %.m | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
-	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PCAP_INCLUDE) -c $< -o $@
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) $(PCAP_INCLUDE) -c $< -o $@
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

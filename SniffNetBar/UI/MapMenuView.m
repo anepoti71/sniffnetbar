@@ -6,6 +6,7 @@
 //
 
 #import "MapMenuView.h"
+#import "ConfigurationManager.h"
 #import <WebKit/WebKit.h>
 #import <CoreLocation/CoreLocation.h>
 
@@ -13,10 +14,6 @@ static NSString *const kMapProviderKey = @"MapProvider";
 static NSString *const kMapProviderURLTemplateKey = @"MapProviderURLTemplate";
 static NSString *const kMapProviderLatKey = @"MapProviderLatKey";
 static NSString *const kMapProviderLonKey = @"MapProviderLonKey";
-
-// Cache limits
-static const NSUInteger kMaxLocationCacheSize = 500;
-static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
 
 @interface MapMenuView () <WKNavigationDelegate>
 @property (nonatomic, strong) WKWebView *webView;
@@ -40,17 +37,27 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
+        // Enable layer backing for proper z-ordering
+        self.wantsLayer = YES;
+
         WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
         _webView = [[WKWebView alloc] initWithFrame:self.bounds configuration:config];
         _webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _webView.navigationDelegate = self;
+        _webView.wantsLayer = YES;
         [self addSubview:_webView];
-        
+
         _zoomInButton = [self zoomButtonWithTitle:@"+" action:@selector(zoomIn:)];
         _zoomOutButton = [self zoomButtonWithTitle:@"−" action:@selector(zoomOut:)];
+        _zoomInButton.wantsLayer = YES;
+        _zoomOutButton.wantsLayer = YES;
         [self addSubview:_zoomInButton];
         [self addSubview:_zoomOutButton];
-        
+
+        // Ensure buttons are on top
+        [_zoomInButton setNeedsDisplay:YES];
+        [_zoomOutButton setNeedsDisplay:YES];
+
         _locationCache = [NSMutableDictionary dictionary];
         _locationCacheTimestamps = [NSMutableDictionary dictionary];
         _inFlightLookups = [NSMutableSet set];
@@ -58,12 +65,18 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         _session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
 
         NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:kMapProviderKey];
-        _providerName = savedProvider.length > 0 ? savedProvider : @"ipinfo.io";
+        NSString *defaultProvider = [ConfigurationManager sharedManager].defaultMapProvider;
+        _providerName = savedProvider.length > 0 ? savedProvider : defaultProvider;
 
         [self loadMapHTML];
         [self updateLayout];
     }
     return self;
+}
+
+- (NSSize)intrinsicContentSize {
+    // Return the size we want the view to be
+    return self.frame.size;
 }
 
 - (void)dealloc {
@@ -82,11 +95,12 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
 - (void)cleanupLocationCache {
     NSDate *now = [NSDate date];
     NSMutableArray<NSString *> *expiredKeys = [NSMutableArray array];
+    ConfigurationManager *config = [ConfigurationManager sharedManager];
 
     // Find expired entries
     for (NSString *key in self.locationCacheTimestamps) {
         NSDate *timestamp = self.locationCacheTimestamps[key];
-        if ([now timeIntervalSinceDate:timestamp] > kLocationCacheExpirationTime) {
+        if ([now timeIntervalSinceDate:timestamp] > config.locationCacheExpirationTime) {
             [expiredKeys addObject:key];
         }
     }
@@ -98,11 +112,11 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
     }
 
     // If still over limit, remove oldest entries
-    if (self.locationCache.count > kMaxLocationCacheSize) {
+    if (self.locationCache.count > config.maxLocationCacheSize) {
         NSArray<NSString *> *sortedKeys = [self.locationCacheTimestamps keysSortedByValueUsingComparator:^NSComparisonResult(NSDate *obj1, NSDate *obj2) {
             return [obj1 compare:obj2];
         }];
-        NSUInteger toRemove = self.locationCache.count - kMaxLocationCacheSize;
+        NSUInteger toRemove = self.locationCache.count - config.maxLocationCacheSize;
         for (NSUInteger i = 0; i < toRemove && i < sortedKeys.count; i++) {
             NSString *key = sortedKeys[i];
             [self.locationCache removeObjectForKey:key];
@@ -111,13 +125,12 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
     }
 
     if (expiredKeys.count > 0) {
-        NSLog(@"MapMenuView: cleaned up %lu expired location cache entries", (unsigned long)expiredKeys.count);
+        SNBLog(@"MapMenuView: cleaned up %lu expired location cache entries", (unsigned long)expiredKeys.count);
     }
 }
 
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
-    [self adjustToMenuWidthIfNeeded];
     if (self.window && self.lastConnections.count > 0) {
         [self updateWithConnections:self.lastConnections];
     }
@@ -125,7 +138,6 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
 
 - (void)viewDidMoveToSuperview {
     [super viewDidMoveToSuperview];
-    [self adjustToMenuWidthIfNeeded];
 }
 
 - (void)setFrameSize:(NSSize)newSize {
@@ -146,9 +158,8 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         return;
     }
 
-    [self adjustToMenuWidthIfNeeded];
     [self cleanupLocationCache];  // Periodic cache cleanup
-    NSLog(@"MapMenuView update: %lu connections", (unsigned long)connections.count);
+    SNBLog(@"MapMenuView update: %lu connections", (unsigned long)connections.count);
     [self updatePublicIPLocationIfNeeded];
     if (connections.count == 0) {
         [self refreshMarkers];
@@ -170,12 +181,12 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         if ([self shouldGeolocateIPAddress:ip]) {
             [targetIps addObject:ip];
         } else {
-            NSLog(@"MapMenuView skip local IP: %@", ip);
+            SNBLog(@"MapMenuView skip local IP: %@", ip);
         }
     }
     self.lastTargetIPs = [targetIps.allObjects sortedArrayUsingSelector:@selector(compare:)];
     
-    NSLog(@"MapMenuView target IPs: %@", targetIps);
+    SNBLog(@"MapMenuView target IPs: %@", targetIps);
     
     BOOL canLookup = YES;
     if ([self.providerName isEqualToString:@"custom"]) {
@@ -201,7 +212,7 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
                     [self.failedLookups addObject:ip];
                     return;
                 }
-                NSLog(@"MapMenuView pin ready for %@ (%f, %f)", ip, coord.latitude, coord.longitude);
+                SNBLog(@"MapMenuView pin ready for %@ (%f, %f)", ip, coord.latitude, coord.longitude);
                 [self refreshMarkers];
             });
         }];
@@ -222,10 +233,10 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         return;
     }
     
-    NSLog(@"MapMenuView public IP lookup via %@", url.absoluteString);
+    SNBLog(@"MapMenuView public IP lookup via %@", url.absoluteString);
     NSURLSessionDataTask *task = [self.session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error || !data) {
-            NSLog(@"MapMenuView public IP lookup failed: %@", error.localizedDescription);
+            SNBLog(@"MapMenuView public IP lookup failed: %@", error.localizedDescription);
             self.publicIPLookupInFlight = NO;
             return;
         }
@@ -233,29 +244,29 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         NSError *jsonError;
         id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
         if (jsonError || ![json isKindOfClass:[NSDictionary class]]) {
-            NSLog(@"MapMenuView public IP JSON error: %@", jsonError.localizedDescription);
+            SNBLog(@"MapMenuView public IP JSON error: %@", jsonError.localizedDescription);
             self.publicIPLookupInFlight = NO;
             return;
         }
         
         NSString *ip = json[@"ip"];
         if (ip.length == 0) {
-            NSLog(@"MapMenuView public IP missing in response");
+            SNBLog(@"MapMenuView public IP missing in response");
             self.publicIPLookupInFlight = NO;
             return;
         }
         
-        NSLog(@"MapMenuView public IP: %@", ip);
+        SNBLog(@"MapMenuView public IP: %@", ip);
         self.publicIPAddress = ip;
         [self fetchLocationForIP:ip completion:^(CLLocationCoordinate2D coord, BOOL success) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.publicIPLookupInFlight = NO;
                 if (!success) {
-                    NSLog(@"MapMenuView public IP geolocation failed: %@", ip);
+                    SNBLog(@"MapMenuView public IP geolocation failed: %@", ip);
                     return;
                 }
                 self.publicIPCoordinate = [NSValue valueWithBytes:&coord objCType:@encode(CLLocationCoordinate2D)];
-                NSLog(@"MapMenuView public IP located: %@ => (%f, %f)", ip, coord.latitude, coord.longitude);
+                SNBLog(@"MapMenuView public IP located: %@ => (%f, %f)", ip, coord.latitude, coord.longitude);
                 [self refreshMarkers];
             });
         }];
@@ -300,7 +311,7 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
     NSError *jsonError;
     NSData *data = [NSJSONSerialization dataWithJSONObject:points options:0 error:&jsonError];
     if (!data) {
-        NSLog(@"MapMenuView JSON encode error: %@", jsonError.localizedDescription);
+        SNBLog(@"MapMenuView JSON encode error: %@", jsonError.localizedDescription);
         return;
     }
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
@@ -310,8 +321,9 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         [self.publicIPCoordinate getValue:&publicCoord];
     }
 
+    ConfigurationManager *config = [ConfigurationManager sharedManager];
     NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
-    NSInteger maxLines = MIN(10, self.lastConnections.count);
+    NSInteger maxLines = MIN(config.maxConnectionLinesToShow, self.lastConnections.count);
     for (NSInteger i = 0; i < maxLines; i++) {
         ConnectionTraffic *connection = self.lastConnections[i];
 
@@ -350,39 +362,45 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
                            @"dstLon": @(dstCoord.longitude),
                            @"title": lineTitle}];
     }
-    NSLog(@"MapMenuView: created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)self.lastConnections.count);
+    SNBLog(@"MapMenuView: created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)self.lastConnections.count);
     if (lines.count > 0) {
-        NSLog(@"MapMenuView: First line example: %@", lines[0]);
+        SNBLog(@"MapMenuView: First line example: %@", lines[0]);
     }
 
     NSData *lineData = [NSJSONSerialization dataWithJSONObject:lines options:0 error:&jsonError];
     if (!lineData) {
-        NSLog(@"MapMenuView JSON encode error (lines): %@", jsonError.localizedDescription);
+        SNBLog(@"MapMenuView JSON encode error (lines): %@", jsonError.localizedDescription);
         return;
     }
     NSString *lineJson = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
-    NSLog(@"MapMenuView: Line JSON being sent: %@", lineJson);
+    SNBLog(@"MapMenuView: Line JSON being sent: %@", lineJson);
     NSString *script = [NSString stringWithFormat:@"window.SniffNetBar && window.SniffNetBar.setMarkers(%@, %@);", json, lineJson];
     [self.webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
         if (error) {
-            NSLog(@"MapMenuView JS error: %@", error.localizedDescription);
+            SNBLog(@"MapMenuView JS error: %@", error.localizedDescription);
         }
     }];
 }
 
 - (void)loadMapHTML {
-    NSString *html = @"<!doctype html>"
+    ConfigurationManager *config = [ConfigurationManager sharedManager];
+    NSString *lineColor = config.connectionLineColor;
+    NSInteger lineWeight = config.connectionLineWeight;
+    CGFloat lineOpacity = config.connectionLineOpacity;
+
+    NSString *html = [NSString stringWithFormat:
+    @"<!doctype html>"
     "<html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
     "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>"
-    "<style>html,body,#map{height:100%;margin:0;}#map{background:#1b2b3a;}</style>"
+    "<style>html,body,#map{height:100%%;margin:0;}#map{background:#1b2b3a;}</style>"
     "</head><body>"
     "<div id='map'></div>"
     "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>"
     "<script>"
     "var map=L.map('map',{zoomControl:false,attributionControl:false}).setView([20,0],2);"
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);"
-    "var markers=[];var lines=[];"
+    "var markers=[];var lines=[];var hasAutoFitted=false;"
     "function clearMarkers(){markers.forEach(function(m){map.removeLayer(m);});markers=[];}"
     "function clearLines(){lines.forEach(function(l){map.removeLayer(l);});lines=[];}"
     "function arcPoints(a,b){var lat1=a.lat,lon1=a.lon,lat2=b.lat,lon2=b.lon;"
@@ -398,13 +416,14 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
     "if(connections){console.log('Processing connections:',connections);connections.forEach(function(c){"
     "console.log('Connection:',c);if(typeof c.srcLat!=='number'||typeof c.srcLon!=='number'||typeof c.dstLat!=='number'||typeof c.dstLon!=='number'){console.log('Invalid coords, skipping');return;}"
     "var arcPts=arcPoints({lat:c.srcLat,lon:c.srcLon},{lat:c.dstLat,lon:c.dstLon});console.log('Arc points:',arcPts.length);"
-    "var line=L.polyline(arcPts,{color:'#ff7a18',weight:3,opacity:0.9});"
+    "var line=L.polyline(arcPts,{color:'%@',weight:%ld,opacity:%f});"
     "if(c.title){line.bindPopup(c.title);}line.addTo(map);lines.push(line);console.log('Line added to map');bounds.push([c.srcLat,c.srcLon]);bounds.push([c.dstLat,c.dstLon]);});}"
-    "if(bounds.length>0){map.fitBounds(bounds,{padding:[20,20],maxZoom:6});}}"
+    "if(bounds.length>0&&!hasAutoFitted){map.fitBounds(bounds,{padding:[20,20],maxZoom:6});hasAutoFitted=true;}}"
     "function zoomIn(){map.zoomIn();}"
     "function zoomOut(){map.zoomOut();}"
-    "window.SniffNetBar={setMarkers:setMarkers,zoomIn:zoomIn,zoomOut:zoomOut};"
-    "</script></body></html>";
+    "function resetView(){hasAutoFitted=false;}"
+    "window.SniffNetBar={setMarkers:setMarkers,zoomIn:zoomIn,zoomOut:zoomOut,resetView:resetView};"
+    "</script></body></html>", lineColor, (long)lineWeight, lineOpacity];
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
@@ -426,21 +445,12 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
     CGFloat top = NSMaxY(self.bounds) - padding - buttonSize;
     self.zoomInButton.frame = NSMakeRect(right, top, buttonSize, buttonSize);
     self.zoomOutButton.frame = NSMakeRect(right, top - buttonSize - 4.0, buttonSize, buttonSize);
-}
 
-- (void)adjustToMenuWidthIfNeeded {
-    if (!self.superview) {
-        return;
-    }
-    CGFloat menuWidth = NSWidth(self.superview.bounds);
-    if (menuWidth <= 0) {
-        return;
-    }
-    if (fabs(NSWidth(self.frame) - menuWidth) > 0.5) {
-        NSRect frame = self.frame;
-        frame.size.width = menuWidth;
-        self.frame = frame;
-    }
+    // Ensure buttons stay on top of webview
+    [self.zoomInButton removeFromSuperview];
+    [self.zoomOutButton removeFromSuperview];
+    [self addSubview:self.zoomInButton];
+    [self addSubview:self.zoomOutButton];
 }
 
 - (void)zoomIn:(id)sender {
@@ -501,21 +511,21 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         return;
     }
     
-    NSLog(@"MapMenuView lookup %@ via %@", ip, urlString);
+    SNBLog(@"MapMenuView lookup %@ via %@", ip, urlString);
     
     NSURLSessionDataTask *task = [self.session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
         if (error || !data) {
-            NSLog(@"MapMenuView lookup failed for %@: %@", ip, error.localizedDescription);
+            SNBLog(@"MapMenuView lookup failed for %@: %@", ip, error.localizedDescription);
             completion(kCLLocationCoordinate2DInvalid, NO);
             return;
         }
         if (httpResponse) {
-            NSLog(@"MapMenuView response %@ status %ld", ip, (long)httpResponse.statusCode);
+            SNBLog(@"MapMenuView response %@ status %ld", ip, (long)httpResponse.statusCode);
         }
         
         if ([provider isEqualToString:@"ip-api.com"] && httpResponse.statusCode == 403) {
-            NSLog(@"MapMenuView fallback to ipinfo.io for %@", ip);
+            SNBLog(@"MapMenuView fallback to ipinfo.io for %@", ip);
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *savedProvider = self.providerName;
                 self.providerName = @"ipinfo.io";
@@ -528,7 +538,7 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         NSError *jsonError;
         id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
         if (jsonError || ![json isKindOfClass:[NSDictionary class]]) {
-            NSLog(@"MapMenuView JSON error for %@: %@", ip, jsonError.localizedDescription);
+            SNBLog(@"MapMenuView JSON error for %@: %@", ip, jsonError.localizedDescription);
             completion(kCLLocationCoordinate2DInvalid, NO);
             return;
         }
@@ -593,7 +603,7 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
         }
         
         if (success) {
-            NSLog(@"MapMenuView location %@ => (%f, %f)", ip, lat, lon);
+            SNBLog(@"MapMenuView location %@ => (%f, %f)", ip, lat, lon);
             NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:@{@"lat": @(lat), @"lon": @(lon)}];
             if (name.length > 0) {
                 payload[@"name"] = name;
@@ -607,7 +617,7 @@ static const NSTimeInterval kLocationCacheExpirationTime = 7200; // 2 hours
                 completion(CLLocationCoordinate2DMake(lat, lon), YES);
             });
         } else {
-            NSLog(@"MapMenuView location missing for %@ (%@)", ip, provider);
+            SNBLog(@"MapMenuView location missing for %@ (%@)", ip, provider);
             completion(kCLLocationCoordinate2DInvalid, NO);
         }
     }];
