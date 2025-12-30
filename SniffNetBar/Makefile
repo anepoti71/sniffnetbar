@@ -32,14 +32,16 @@ PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IThreat
 CORE_SOURCES = Core/main.m Core/AppDelegate.m
 CONFIG_SOURCES = Config/ConfigurationManager.m Config/KeychainManager.m
 MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m
-NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m
+NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m \
+                  Network/DeviceManager.m
 THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/ThreatIntelProvider.m \
                       ThreatIntel/ThreatIntelCache.m \
                       ThreatIntel/ThreatIntelFacade.m \
+                      ThreatIntel/ThreatIntelCoordinator.m \
                       ThreatIntel/Providers/VirusTotalProvider.m \
                       ThreatIntel/Providers/AbuseIPDBProvider.m
-UI_SOURCES = UI/MapMenuView.m
+UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m
 
 # Test sources
 TEST_SOURCES = Tests/ThreatIntel/ThreatIntelCacheTests.m \
@@ -54,7 +56,7 @@ SOURCES = $(CORE_SOURCES) $(CONFIG_SOURCES) $(MODEL_SOURCES) \
 
 # Library sources (for tests - exclude main.m and AppDelegate.m)
 LIB_SOURCES = $(CONFIG_SOURCES) $(MODEL_SOURCES) $(NETWORK_SOURCES) \
-              $(THREATINTEL_SOURCES) UI/MapMenuView.m
+              $(THREATINTEL_SOURCES) UI/MapMenuView.m UI/MenuBuilder.m
 
 OBJECTS = $(SOURCES:%.m=$(BUILD_DIR)/%.o)
 LIB_OBJECTS = $(LIB_SOURCES:%.m=$(BUILD_DIR)/%.o)
