@@ -16,6 +16,11 @@
 #import "ThreatIntelModels.h"
 #import "VirusTotalProvider.h"
 #import "AbuseIPDBProvider.h"
+#import "KeychainManager.h"
+
+// Keychain identifier constants (defined in ConfigurationManager.m)
+extern NSString * const kVirusTotalAPIKeyIdentifier;
+extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 
 static NSString *const kSelectedDeviceKey = @"SelectedNetworkDevice";
 static NSString *const kMapProviderKey = @"MapProvider";
@@ -739,7 +744,110 @@ static NSString *const kThreatIntelEnabledKey = @"ThreatIntelEnabled";
     [self updateMenu];
 }
 
+- (BOOL)isPublicIPAddress:(NSString *)ipAddress {
+    // Skip private, local, and loopback IP addresses
+    // Only send public IPs to threat intelligence providers
+
+    if (!ipAddress || ipAddress.length == 0) {
+        return NO;
+    }
+
+    // Check for IPv4 private ranges
+    if ([ipAddress containsString:@"."]) {
+        // Split into octets
+        NSArray *octets = [ipAddress componentsSeparatedByString:@"."];
+        if (octets.count != 4) {
+            return NO;
+        }
+
+        NSInteger first = [octets[0] integerValue];
+        NSInteger second = [octets[1] integerValue];
+
+        // 127.0.0.0/8 - Loopback
+        if (first == 127) {
+            return NO;
+        }
+
+        // 10.0.0.0/8 - Private
+        if (first == 10) {
+            return NO;
+        }
+
+        // 172.16.0.0/12 - Private
+        if (first == 172 && second >= 16 && second <= 31) {
+            return NO;
+        }
+
+        // 192.168.0.0/16 - Private
+        if (first == 192 && second == 168) {
+            return NO;
+        }
+
+        // 169.254.0.0/16 - Link-local
+        if (first == 169 && second == 254) {
+            return NO;
+        }
+
+        // 224.0.0.0/4 - Multicast
+        if (first >= 224 && first <= 239) {
+            return NO;
+        }
+
+        // 240.0.0.0/4 - Reserved
+        if (first >= 240) {
+            return NO;
+        }
+
+        // 0.0.0.0/8 - Current network
+        if (first == 0) {
+            return NO;
+        }
+
+        return YES; // Public IPv4
+    }
+
+    // Check for IPv6 private/local ranges
+    if ([ipAddress containsString:@":"]) {
+        NSString *lowerIP = [ipAddress lowercaseString];
+
+        // ::1 - Loopback
+        if ([lowerIP isEqualToString:@"::1"] || [lowerIP hasPrefix:@"::1/"]) {
+            return NO;
+        }
+
+        // fe80::/10 - Link-local
+        if ([lowerIP hasPrefix:@"fe80:"]) {
+            return NO;
+        }
+
+        // fc00::/7 - Unique local (private)
+        if ([lowerIP hasPrefix:@"fc"] || [lowerIP hasPrefix:@"fd"]) {
+            return NO;
+        }
+
+        // ff00::/8 - Multicast
+        if ([lowerIP hasPrefix:@"ff"]) {
+            return NO;
+        }
+
+        // :: - Unspecified
+        if ([lowerIP isEqualToString:@"::"]) {
+            return NO;
+        }
+
+        return YES; // Public IPv6
+    }
+
+    return NO; // Unknown format
+}
+
 - (void)enrichAndDisplayThreatIntelForIP:(NSString *)ipAddress {
+    // Only enrich public IP addresses
+    if (![self isPublicIPAddress:ipAddress]) {
+        SNBLog(@"Skipping threat intel for private/local IP: %@", ipAddress);
+        return;
+    }
+
     // Check if we already have a result
     if (self.threatIntelResults[ipAddress]) {
         return; // Already have it

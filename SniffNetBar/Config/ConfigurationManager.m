@@ -6,6 +6,11 @@
 //
 
 #import "ConfigurationManager.h"
+#import "KeychainManager.h"
+
+// Define keychain identifier constants
+NSString * const kVirusTotalAPIKeyIdentifier = @"VirusTotalAPIKey";
+NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
 
 @interface ConfigurationManager ()
 @property (nonatomic, strong) NSDictionary *configuration;
@@ -193,8 +198,26 @@
 }
 
 - (NSString *)virusTotalAPIKey {
-    NSString *value = self.configuration[@"VirusTotalAPIKey"];
-    return value.length > 0 ? value : @"";
+    // Try keychain first
+    NSError *error = nil;
+    NSString *keychainKey = [KeychainManager getAPIKeyForIdentifier:kVirusTotalAPIKeyIdentifier
+                                                              error:&error];
+    if (keychainKey.length > 0) {
+        return keychainKey;
+    }
+
+    // Fall back to plist for backward compatibility (migration scenario)
+    NSString *plistKey = self.configuration[@"VirusTotalAPIKey"];
+    if (plistKey.length > 0 && ![plistKey isEqualToString:@"YOUR_API_KEY_HERE"]) {
+        // Migrate to keychain
+        [KeychainManager saveAPIKey:plistKey
+                      forIdentifier:kVirusTotalAPIKeyIdentifier
+                              error:nil];
+        NSLog(@"[ConfigurationManager] Migrated VirusTotal API key to keychain");
+        return plistKey;
+    }
+
+    return @"";
 }
 
 - (NSTimeInterval)virusTotalTimeout {
@@ -225,8 +248,26 @@
 }
 
 - (NSString *)abuseIPDBAPIKey {
-    NSString *value = self.configuration[@"AbuseIPDBAPIKey"];
-    return value.length > 0 ? value : @"";
+    // Try keychain first
+    NSError *error = nil;
+    NSString *keychainKey = [KeychainManager getAPIKeyForIdentifier:kAbuseIPDBAPIKeyIdentifier
+                                                              error:&error];
+    if (keychainKey.length > 0) {
+        return keychainKey;
+    }
+
+    // Fall back to plist for backward compatibility (migration scenario)
+    NSString *plistKey = self.configuration[@"AbuseIPDBAPIKey"];
+    if (plistKey.length > 0 && ![plistKey isEqualToString:@"YOUR_API_KEY_HERE"]) {
+        // Migrate to keychain
+        [KeychainManager saveAPIKey:plistKey
+                      forIdentifier:kAbuseIPDBAPIKeyIdentifier
+                              error:nil];
+        NSLog(@"[ConfigurationManager] Migrated AbuseIPDB API key to keychain");
+        return plistKey;
+    }
+
+    return @"";
 }
 
 - (NSTimeInterval)abuseIPDBTimeout {
@@ -247,6 +288,18 @@
 - (NSInteger)abuseIPDBMaxAgeInDays {
     NSNumber *value = self.configuration[@"AbuseIPDBMaxAgeInDays"];
     return value ? [value integerValue] : 90;
+}
+
+#pragma mark - API Key Management
+
+- (void)setAPIKey:(nullable NSString *)apiKey forIdentifier:(NSString *)identifier {
+    NSError *error = nil;
+    if ([KeychainManager saveAPIKey:apiKey forIdentifier:identifier error:&error]) {
+        NSLog(@"[ConfigurationManager] API key saved to keychain: %@", identifier);
+    } else {
+        NSLog(@"[ConfigurationManager] Failed to save API key to keychain: %@, error: %@",
+              identifier, error.localizedDescription);
+    }
 }
 
 @end

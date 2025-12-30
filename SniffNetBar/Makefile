@@ -11,7 +11,7 @@ MACOS_DIR = $(CONTENTS_DIR)/MacOS
 RESOURCES_DIR = $(CONTENTS_DIR)/Resources
 INFO_PLIST_SRC = Info.plist
 ICON_SRC = ../resources/logos/raw/icon_macos.png
-FRAMEWORKS = -framework Cocoa -framework SystemConfiguration -framework WebKit -framework CoreLocation
+FRAMEWORKS = -framework Cocoa -framework SystemConfiguration -framework WebKit -framework CoreLocation -framework Security
 PCAP_LIBS = -lpcap
 CC = clang
 CFLAGS = -std=c11 -Wall -Wextra -O2
@@ -30,7 +30,7 @@ PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IThreat
 
 # Source files (organized by domain)
 CORE_SOURCES = Core/main.m Core/AppDelegate.m
-CONFIG_SOURCES = Config/ConfigurationManager.m
+CONFIG_SOURCES = Config/ConfigurationManager.m Config/KeychainManager.m
 MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m
 NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m
 THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
@@ -61,7 +61,7 @@ LIB_OBJECTS = $(LIB_SOURCES:%.m=$(BUILD_DIR)/%.o)
 TEST_OBJECTS = $(TEST_SOURCES:%.m=$(BUILD_DIR)/%.o)
 
 # Targets
-all: $(APP_BUNDLE)
+all: $(APP_BUNDLE) tools
 
 $(APP_BUNDLE): $(MACOS_DIR)/$(APP_NAME) $(INFO_PLIST_SRC) | $(RESOURCES_DIR)
 	@cp $(INFO_PLIST_SRC) $(CONTENTS_DIR)/Info.plist
@@ -83,6 +83,21 @@ $(MACOS_DIR):
 
 $(RESOURCES_DIR):
 	mkdir -p $(RESOURCES_DIR)
+
+# Command-line tools for API key management
+tools: $(BUILD_DIR)/set_apikey $(BUILD_DIR)/remove_apikey $(BUILD_DIR)/list_apikeys
+
+$(BUILD_DIR)/set_apikey: Scripts/set_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o
+	@echo "Building set_apikey tool..."
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/set_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o -o $(BUILD_DIR)/set_apikey $(FRAMEWORKS)
+
+$(BUILD_DIR)/remove_apikey: Scripts/remove_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o
+	@echo "Building remove_apikey tool..."
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/remove_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o -o $(BUILD_DIR)/remove_apikey $(FRAMEWORKS)
+
+$(BUILD_DIR)/list_apikeys: Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o
+	@echo "Building list_apikeys tool..."
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o -o $(BUILD_DIR)/list_apikeys $(FRAMEWORKS)
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -118,4 +133,4 @@ $(BUILD_DIR)/TestRunner: $(LIB_OBJECTS) $(TEST_OBJECTS) | $(BUILD_DIR)
 test-build: $(LIB_OBJECTS) $(TEST_OBJECTS)
 	@echo "Test files compiled successfully"
 
-.PHONY: all clean install run test test-build
+.PHONY: all clean install run test tools test-build
