@@ -10,6 +10,7 @@
 #import "UserDefaultsKeys.h"
 #import "VirusTotalProvider.h"
 #import "AbuseIPDBProvider.h"
+#import "IPAddressUtilities.h"
 
 @interface ThreatIntelCoordinator ()
 @property (nonatomic, strong) ConfigurationManager *configuration;
@@ -118,29 +119,16 @@
     }
 
     if ([ipAddress containsString:@"."]) {
+        if (![IPAddressUtilities isValidIPv4:ipAddress]) {
+            return NO;
+        }
+        if ([IPAddressUtilities isPrivateIPv4Address:ipAddress]) {
+            return NO;
+        }
+
         NSArray *octets = [ipAddress componentsSeparatedByString:@"."];
-        if (octets.count != 4) {
-            return NO;
-        }
-
         NSInteger first = [octets[0] integerValue];
-        NSInteger second = [octets[1] integerValue];
 
-        if (first == 127) {
-            return NO;
-        }
-        if (first == 10) {
-            return NO;
-        }
-        if (first == 172 && second >= 16 && second <= 31) {
-            return NO;
-        }
-        if (first == 192 && second == 168) {
-            return NO;
-        }
-        if (first == 169 && second == 254) {
-            return NO;
-        }
         if (first >= 224 && first <= 239) {
             return NO;
         }

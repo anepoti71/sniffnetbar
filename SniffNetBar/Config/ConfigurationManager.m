@@ -52,6 +52,11 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
 
     self.configuration = config;
     NSLog(@"[ConfigurationManager] Configuration loaded successfully from %@", path);
+    NSError *validationError = nil;
+    if (![self validateConfiguration:&validationError]) {
+        NSLog(@"[ConfigurationManager] Configuration validation failed: %@",
+              validationError.localizedDescription);
+    }
 }
 
 - (void)loadDefaultConfiguration {
@@ -75,10 +80,89 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
         @"ConnectionLineOpacity": @0.9
     };
     NSLog(@"[ConfigurationManager] Using default configuration");
+    NSError *validationError = nil;
+    if (![self validateConfiguration:&validationError]) {
+        NSLog(@"[ConfigurationManager] Default configuration validation failed: %@",
+              validationError.localizedDescription);
+    }
 }
 
 - (void)reloadConfiguration {
     [self loadConfiguration];
+}
+
+- (BOOL)validateConfiguration:(NSError **)error {
+    NSMutableArray<NSString *> *issues = [NSMutableArray array];
+
+    if (self.menuUpdateInterval <= 0) {
+        [issues addObject:@"MenuUpdateInterval must be greater than 0."];
+    }
+    if (self.deviceListRefreshInterval <= 0) {
+        [issues addObject:@"DeviceListRefreshInterval must be greater than 0."];
+    }
+    if (self.menuFixedWidth <= 0 || self.mapMenuViewHeight <= 0) {
+        [issues addObject:@"MenuFixedWidth and MapMenuViewHeight must be greater than 0."];
+    }
+    if (self.maxTopHostsToShow == 0 || self.maxTopConnectionsToShow == 0) {
+        [issues addObject:@"MaxTopHostsToShow and MaxTopConnectionsToShow must be greater than 0."];
+    }
+    if (self.maxReconnectAttempts == 0) {
+        [issues addObject:@"MaxReconnectAttempts must be greater than 0."];
+    }
+    if (self.reconnectDelay < 0) {
+        [issues addObject:@"ReconnectDelay must be 0 or greater."];
+    }
+    if (self.maxLocationCacheSize == 0 || self.locationCacheExpirationTime <= 0) {
+        [issues addObject:@"Location cache size and expiration time must be greater than 0."];
+    }
+    if (self.threatIntelCacheSize == 0 || self.threatIntelCacheTTL <= 0) {
+        [issues addObject:@"Threat intel cache size and TTL must be greater than 0."];
+    }
+    if (self.defaultMapProvider.length == 0) {
+        [issues addObject:@"DefaultMapProvider must be a non-empty string."];
+    }
+
+    if (self.virusTotalEnabled) {
+        if (self.virusTotalAPIURL.length == 0) {
+            [issues addObject:@"VirusTotalAPIURL must be set when VirusTotal is enabled."];
+        }
+        if (self.virusTotalAPIKey.length == 0) {
+            [issues addObject:@"VirusTotalAPIKey must be set when VirusTotal is enabled."];
+        }
+        if (self.virusTotalMaxRequestsPerMin <= 0) {
+            [issues addObject:@"VirusTotalMaxRequestsPerMin must be greater than 0."];
+        }
+        if (self.virusTotalTimeout <= 0) {
+            [issues addObject:@"VirusTotalTimeout must be greater than 0."];
+        }
+    }
+
+    if (self.abuseIPDBEnabled) {
+        if (self.abuseIPDBAPIURL.length == 0) {
+            [issues addObject:@"AbuseIPDBAPIURL must be set when AbuseIPDB is enabled."];
+        }
+        if (self.abuseIPDBAPIKey.length == 0) {
+            [issues addObject:@"AbuseIPDBAPIKey must be set when AbuseIPDB is enabled."];
+        }
+        if (self.abuseIPDBMaxRequestsPerMin <= 0) {
+            [issues addObject:@"AbuseIPDBMaxRequestsPerMin must be greater than 0."];
+        }
+        if (self.abuseIPDBTimeout <= 0) {
+            [issues addObject:@"AbuseIPDBTimeout must be greater than 0."];
+        }
+    }
+
+    if (issues.count == 0) {
+        return YES;
+    }
+
+    if (error) {
+        NSString *description = [issues componentsJoinedByString:@" "];
+        *error = [NSError errorWithDomain:@"ConfigurationManager"
+                                     code:1001
+                                 userInfo:@{NSLocalizedDescriptionKey: description}];
+    }
+    return NO;
 }
 
 #pragma mark - Logging Configuration

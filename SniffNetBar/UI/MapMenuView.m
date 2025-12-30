@@ -9,6 +9,7 @@
 #import "ByteFormatter.h"
 #import "ConfigurationManager.h"
 #import "ExpiringCache.h"
+#import "IPAddressUtilities.h"
 #import "UserDefaultsKeys.h"
 #import <WebKit/WebKit.h>
 #import <CoreLocation/CoreLocation.h>
@@ -430,18 +431,8 @@
         return NO;
     }
     
-    if ([ip hasPrefix:@"127."] || [ip hasPrefix:@"10."] || [ip hasPrefix:@"192.168."] || [ip hasPrefix:@"169.254."]) {
+    if ([IPAddressUtilities isValidIPv4:ip] && [IPAddressUtilities isPrivateIPv4Address:ip]) {
         return NO;
-    }
-    
-    if ([ip hasPrefix:@"172."]) {
-        NSArray<NSString *> *parts = [ip componentsSeparatedByString:@"."];
-        if (parts.count > 1) {
-            NSInteger second = [parts[1] integerValue];
-            if (second >= 16 && second <= 31) {
-                return NO;
-            }
-        }
     }
     
     if ([ip isEqualToString:@"::1"] || [ip hasPrefix:@"fe80:"] || [ip hasPrefix:@"fc"] || [ip hasPrefix:@"fd"]) {

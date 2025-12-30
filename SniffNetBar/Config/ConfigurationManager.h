@@ -74,6 +74,11 @@ extern NSString * const kAbuseIPDBAPIKeyIdentifier;
  * Useful if the configuration file is modified at runtime
  */
 - (void)reloadConfiguration;
+/**
+ * Validate configuration values and required dependencies.
+ * @param error Optional error describing validation failures.
+ */
+- (BOOL)validateConfiguration:(NSError **)error;
 
 /**
  * Set an API key in the keychain

@@ -42,7 +42,7 @@ THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/Providers/VirusTotalProvider.m \
                       ThreatIntel/Providers/AbuseIPDBProvider.m
 UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m
-UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m
+UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m
 
 # Test sources
 TEST_SOURCES = Tests/ThreatIntel/ThreatIntelCacheTests.m \
