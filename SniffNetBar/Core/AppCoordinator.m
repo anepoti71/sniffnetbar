@@ -15,6 +15,8 @@
 #import "ThreatIntelCoordinator.h"
 #import "Logger.h"
 #import "TrafficStatistics.h"
+#import "AnomalyDetector.h"
+#import "AnomalyStore.h"
 
 @interface AppCoordinator ()
 @property (nonatomic, strong, readwrite) TrafficStatistics *statistics;
@@ -22,8 +24,11 @@
 @property (nonatomic, strong, readwrite) MenuBuilder *menuBuilder;
 @property (nonatomic, strong, readwrite) ThreatIntelCoordinator *threatIntelCoordinator;
 @property (nonatomic, strong, readwrite) ConfigurationManager *configuration;
+@property (nonatomic, strong) SNBAnomalyDetector *anomalyDetector;
 @property (nonatomic, strong) NSTimer *updateTimer;
 @property (nonatomic, strong) NSTimer *deviceRefreshTimer;
+@property (nonatomic, strong) NSTimer *anomalyRetrainTimer;
+@property (nonatomic, assign) BOOL anomalyRetrainInProgress;
 @property (nonatomic, weak) NSStatusItem *statusItem;
 @property (nonatomic, weak) NSMenu *statusMenu;
 @end
@@ -47,11 +52,13 @@
                                               statusItem:statusItem
                                            configuration:_configuration];
         _threatIntelCoordinator = [[ThreatIntelCoordinator alloc] initWithConfiguration:_configuration];
+        _anomalyDetector = [[SNBAnomalyDetector alloc] initWithWindowSeconds:60.0];
 
         // Set up callback for packet updates
         __weak typeof(self) weakSelf = self;
         _deviceManager.packetManager.onPacketReceived = ^(PacketInfo *packetInfo) {
             [weakSelf.statistics processPacket:packetInfo];
+            [weakSelf.anomalyDetector processPacket:packetInfo];
         };
     }
     return self;
@@ -76,6 +83,7 @@
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf) {
             [strongSelf updateMenuIfNeeded];
+            [strongSelf.anomalyDetector flushIfNeeded];
         }
     }];
     [[NSRunLoop mainRunLoop] addTimer:self.updateTimer forMode:NSRunLoopCommonModes];
@@ -90,6 +98,9 @@
         }
     }];
     [[NSRunLoop mainRunLoop] addTimer:self.deviceRefreshTimer forMode:NSRunLoopCommonModes];
+
+    // Set up periodic anomaly retraining
+    [self scheduleAnomalyRetrain];
 }
 
 - (void)stop {
@@ -97,7 +108,10 @@
     self.updateTimer = nil;
     [self.deviceRefreshTimer invalidate];
     self.deviceRefreshTimer = nil;
+    [self.anomalyRetrainTimer invalidate];
+    self.anomalyRetrainTimer = nil;
     [self.deviceManager.packetManager stopCapture];
+    [self.anomalyDetector flushIfNeeded];
 }
 
 - (void)startCaptureWithCurrentDevice {
@@ -197,6 +211,82 @@
 
 - (void)menuDidClose {
     [self.menuBuilder menuDidClose];
+}
+
+#pragma mark - Anomaly retraining
+
+- (void)scheduleAnomalyRetrain {
+    NSTimeInterval retrainInterval = 6.0 * 60.0 * 60.0;
+    __weak typeof(self) weakSelf = self;
+    self.anomalyRetrainTimer = [NSTimer timerWithTimeInterval:retrainInterval
+                                                      repeats:YES
+                                                        block:^(NSTimer *timer) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf) {
+            [strongSelf triggerAnomalyRetrain];
+        }
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:self.anomalyRetrainTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)triggerAnomalyRetrain {
+    if (self.anomalyRetrainInProgress) {
+        return;
+    }
+    self.anomalyRetrainInProgress = YES;
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        SNBLogInfo("Starting anomaly retrain");
+        NSString *trainScript = [[NSBundle mainBundle] pathForResource:@"anomaly_train" ofType:@"py"];
+        NSString *convertScript = [[NSBundle mainBundle] pathForResource:@"convert_iforest_to_coreml" ofType:@"py"];
+        NSString *dbPath = [SNBAnomalyStore defaultDatabasePath];
+        NSString *modelPath = [SNBAnomalyStore defaultModelPath];
+        NSString *supportDir = [SNBAnomalyStore applicationSupportDirectoryPath];
+        NSString *coreMLModelPath = [supportDir stringByAppendingPathComponent:@"anomaly_model.mlmodel"];
+
+        BOOL trained = [self runPythonScript:trainScript
+                                   arguments:@[@"--db", dbPath, @"--out", modelPath]];
+
+        if (trained && convertScript.length > 0) {
+            [self runPythonScript:convertScript
+                        arguments:@[@"--db", dbPath, @"--out", coreMLModelPath, @"--compile"]];
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.anomalyRetrainInProgress = NO;
+            if (trained) {
+                SNBLogInfo("Anomaly retrain completed");
+                [self.anomalyDetector reloadModels];
+            } else {
+                SNBLogWarn("Anomaly retrain failed");
+            }
+        });
+    });
+}
+
+- (BOOL)runPythonScript:(NSString *)scriptPath arguments:(NSArray<NSString *> *)arguments {
+    if (scriptPath.length == 0) {
+        return NO;
+    }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:scriptPath]) {
+        return NO;
+    }
+
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/usr/bin/python3";
+    task.arguments = [@[scriptPath] arrayByAddingObjectsFromArray:arguments];
+    task.standardOutput = [NSPipe pipe];
+    task.standardError = [NSPipe pipe];
+
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (NSException *exception) {
+        return NO;
+    }
+
+    return task.terminationStatus == 0;
 }
 
 @end

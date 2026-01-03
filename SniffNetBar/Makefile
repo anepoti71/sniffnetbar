@@ -11,8 +11,9 @@ MACOS_DIR = $(CONTENTS_DIR)/MacOS
 RESOURCES_DIR = $(CONTENTS_DIR)/Resources
 INFO_PLIST_SRC = Info.plist
 ICON_SRC = ../resources/logos/raw/icon_macos.png
-FRAMEWORKS = -framework Cocoa -framework SystemConfiguration -framework WebKit -framework CoreLocation -framework Security
+FRAMEWORKS = -framework Cocoa -framework SystemConfiguration -framework WebKit -framework CoreLocation -framework Security -framework CoreML
 PCAP_LIBS = -lpcap
+SQLITE_LIBS = -lsqlite3
 CC = clang
 CFLAGS = -std=c11 -Wall -Wextra -O2
 OBJCFLAGS = -fobjc-arc -fobjc-weak -std=gnu11 -Wall -Wextra -O2
@@ -31,7 +32,9 @@ PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IThreat
 # Source files (organized by domain)
 CORE_SOURCES = Core/main.m Core/AppDelegate.m Core/AppCoordinator.m
 CONFIG_SOURCES = Config/ConfigurationManager.m Config/KeychainManager.m Config/UserDefaultsKeys.m
-MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m
+MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m \
+                Models/AnomalyDetector.m Models/AnomalyStore.m \
+                Models/AnomalyPythonScorer.m Models/AnomalyCoreMLScorer.m
 NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m \
                   Network/DeviceManager.m
 THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
@@ -70,9 +73,13 @@ $(APP_BUNDLE): $(MACOS_DIR)/$(APP_NAME) $(INFO_PLIST_SRC) | $(RESOURCES_DIR)
 	@cp $(INFO_PLIST_SRC) $(CONTENTS_DIR)/Info.plist
 	@cp Config/Configuration.plist $(RESOURCES_DIR)/Configuration.plist
 	@cp $(ICON_SRC) $(RESOURCES_DIR)/icon_macos.png
+	@cp Scripts/anomaly_score.py $(RESOURCES_DIR)/anomaly_score.py
+	@cp Scripts/anomaly_train.py $(RESOURCES_DIR)/anomaly_train.py
+	@cp Scripts/convert_iforest_to_coreml.py $(RESOURCES_DIR)/convert_iforest_to_coreml.py
+	@if [ -d ../resources/anomaly_model.mlmodelc ]; then cp -R ../resources/anomaly_model.mlmodelc $(RESOURCES_DIR)/anomaly_model.mlmodelc; fi
 
 $(MACOS_DIR)/$(APP_NAME): $(OBJECTS) | $(MACOS_DIR)
-	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(OBJECTS) -o $@ $(FRAMEWORKS) $(PCAP_LIBDIR) $(PCAP_LIBS)
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(OBJECTS) -o $@ $(FRAMEWORKS) $(PCAP_LIBDIR) $(PCAP_LIBS) $(SQLITE_LIBS)
 
 $(BUILD_DIR)/%.o: %.m | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
@@ -130,7 +137,7 @@ test: $(BUILD_DIR)/TestRunner
 $(BUILD_DIR)/TestRunner: $(LIB_OBJECTS) $(TEST_OBJECTS) | $(BUILD_DIR)
 	@echo "Building test runner..."
 	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(LIB_OBJECTS) $(TEST_OBJECTS) -o $@ \
-		$(FRAMEWORKS) $(TEST_FRAMEWORKS) $(PCAP_LIBDIR) $(PCAP_LIBS) \
+		$(FRAMEWORKS) $(TEST_FRAMEWORKS) $(PCAP_LIBDIR) $(PCAP_LIBS) $(SQLITE_LIBS) \
 		-Xlinker -bundle_loader -Xlinker /Applications/Xcode.app/Contents/Developer/usr/bin/xctest
 
 test-build: $(LIB_OBJECTS) $(TEST_OBJECTS)
