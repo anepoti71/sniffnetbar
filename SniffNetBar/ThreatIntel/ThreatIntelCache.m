@@ -5,6 +5,7 @@
 
 #import "ThreatIntelCache.h"
 #import "ConfigurationManager.h"
+#import "Logger.h"
 
 @interface TICacheEntry : NSObject
 @property (nonatomic, strong) TIResult *result;
@@ -57,7 +58,7 @@
                 // Expired, remove
                 [self.cache removeObjectForKey:key];
                 self.misses++;
-                SNBLog(@"ThreatIntelCache: Expired entry for %@", key);
+                SNBLogThreatIntelDebug("Expired entry for %{" SNB_IP_PRIVACY "}@", key);
                 return;
             }
 
@@ -65,10 +66,10 @@
             entry.accessedAt = now;
             result = entry.result;
             self.hits++;
-            SNBLog(@"ThreatIntelCache: Hit for %@", key);
+            SNBLogThreatIntelDebug("Hit for %{" SNB_IP_PRIVACY "}@", key);
         } else {
             self.misses++;
-            SNBLog(@"ThreatIntelCache: Miss for %@", key);
+            SNBLogThreatIntelDebug("Miss for %{" SNB_IP_PRIVACY "}@", key);
         }
     });
 
@@ -86,7 +87,7 @@
         entry.accessedAt = [NSDate date];
 
         self.cache[key] = entry;
-        SNBLog(@"ThreatIntelCache: Cached %@ (expires: %@)", key, entry.expiresAt);
+        SNBLogThreatIntelDebug("Cached %{" SNB_IP_PRIVACY "}@ (expires: %{public}@)", key, entry.expiresAt);
 
         // Evict LRU if over capacity
         if (self.cache.count > self.maxSize) {
@@ -119,7 +120,7 @@
         if (provider && indicator) {
             NSString *key = [self keyForProvider:provider indicator:indicator];
             [self.cache removeObjectForKey:key];
-            SNBLog(@"ThreatIntelCache: Invalidated %@", key);
+            SNBLogThreatIntelDebug("Invalidated %{" SNB_IP_PRIVACY "}@", key);
         } else if (provider) {
             // Remove all entries for provider
             NSArray *keys = [self.cache allKeys];
@@ -128,7 +129,7 @@
                     [self.cache removeObjectForKey:key];
                 }
             }
-            SNBLog(@"ThreatIntelCache: Invalidated all entries for provider %@", provider);
+            SNBLogThreatIntelDebug("Invalidated all entries for provider %{public}@", provider);
         } else {
             [self clear];
         }
@@ -138,7 +139,7 @@
 - (void)clear {
     dispatch_async(self.cacheQueue, ^{
         [self.cache removeAllObjects];
-        SNBLog(@"ThreatIntelCache: Cleared all entries");
+        SNBLogThreatIntelDebug("Cleared all entries");
     });
 }
 
@@ -176,7 +177,7 @@
 
     if (lruKey) {
         [self.cache removeObjectForKey:lruKey];
-        SNBLog(@"ThreatIntelCache: Evicted LRU entry %@", lruKey);
+        SNBLogThreatIntelDebug("Evicted LRU entry %{" SNB_IP_PRIVACY "}@", lruKey);
     }
 }
 

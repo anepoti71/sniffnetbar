@@ -6,6 +6,7 @@
 //
 
 #import "NetworkDevice.h"
+#import "Logger.h"
 #import <pcap/pcap.h>
 #import <sys/socket.h>
 #import <net/if.h>
@@ -32,7 +33,7 @@
     // Use pcap to find all capturable devices (only active/UP interfaces)
     pcap_if_t *allDevs;
     if (pcap_findalldevs(&allDevs, errbuf) == -1) {
-        NSLog(@"Error finding devices: %s", errbuf);
+        SNBLogNetworkError("Error finding devices: %{public}s", errbuf);
         return devices;
     }
 
@@ -109,7 +110,7 @@
     }
 
     // No devices available - return placeholder to prevent nil
-    NSLog(@"Warning: No network devices available, returning placeholder");
+    SNBLogNetworkWarn("No network devices available, returning placeholder");
     return [[NetworkDevice alloc] initWithName:@"(no device)"
                                    description:@"No network devices found"
                                      addresses:@[]];

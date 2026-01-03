@@ -7,6 +7,7 @@
 #import "ThreatIntelCache.h"
 #import "ConfigurationManager.h"
 #import "IPAddressUtilities.h"
+#import "Logger.h"
 
 @interface ThreatIntelFacade ()
 @property (nonatomic, strong) NSMutableArray<id<ThreatIntelProvider>> *providers;
@@ -41,12 +42,12 @@
 - (void)configureWithProviders:(NSArray<id<ThreatIntelProvider>> *)providers {
     [self.providers removeAllObjects];
     [self.providers addObjectsFromArray:providers];
-    SNBLog(@"ThreatIntelFacade: Configured with %lu providers", (unsigned long)providers.count);
+    SNBLogThreatIntelDebug("Configured with %lu providers", (unsigned long)providers.count);
 }
 
 - (void)addProvider:(id<ThreatIntelProvider>)provider {
     [self.providers addObject:provider];
-    SNBLog(@"ThreatIntelFacade: Added provider %@", provider.name);
+    SNBLogThreatIntelDebug("Added provider %{public}@", provider.name);
 }
 
 - (void)enrichIP:(NSString *)ipAddress completion:(TIEnrichmentCompletion)completion {
@@ -85,7 +86,7 @@
             if (completion) {
                 [callbacks addObject:[completion copy]];
             }
-            SNBLog(@"ThreatIntelFacade: Coalescing request for %@", indicator.value);
+            SNBLogThreatIntelDebug("Coalescing request for %{" SNB_IP_PRIVACY "}@", indicator.value);
             return;
         }
 
@@ -185,7 +186,7 @@
     response.duration = [[NSDate date] timeIntervalSinceDate:startTime];
     response.cacheHits = cacheHits;
 
-    SNBLog(@"ThreatIntelFacade: Enrichment completed for %@ - %lu providers, %ld hits, score=%ld, verdict=%@",
+    SNBLogThreatIntelDebug("Enrichment completed for %{" SNB_IP_PRIVACY "}@ - %lu providers, %ld hits, score=%ld, verdict=%{public}@",
            indicator.value, (unsigned long)results.count, (long)cacheHits,
            (long)scoringResult.finalScore, [scoringResult verdictString]);
 

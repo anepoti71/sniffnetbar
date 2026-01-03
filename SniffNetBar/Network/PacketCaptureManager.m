@@ -7,6 +7,7 @@
 
 #import "PacketCaptureManager.h"
 #import "PacketInfo.h"
+#import "Logger.h"
 #import <pcap/pcap.h>
 #import <net/ethernet.h>
 #import <netinet/ip.h>
@@ -87,7 +88,7 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
     
     // Set non-blocking mode
     if (pcap_setnonblock(self.pcapHandle, 1, errbuf) == -1) {
-        NSLog(@"Warning: Failed to set non-blocking mode: %s", errbuf);
+        SNBLogNetworkWarn("Failed to set non-blocking mode: %{public}s", errbuf);
     }
     
     self.currentDeviceName = deviceName ?: [NSString stringWithUTF8String:device];
@@ -183,7 +184,7 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
         } else if (result == -1) {
             // Error
             const char *errorMsg = pcap_geterr(self.pcapHandle);
-            NSLog(@"WARNING: Error reading packet: %s", errorMsg);
+            SNBLogNetworkWarn("Error reading packet: %{public}s", errorMsg);
 
             // Notify error callback
             if (self.onCaptureError) {

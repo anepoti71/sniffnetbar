@@ -6,6 +6,7 @@
 //
 
 #import "AbuseIPDBProvider.h"
+#import "Logger.h"
 
 static NSTimeInterval const kDefaultTTL = 86400.0;  // 24 hours
 static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
@@ -96,8 +97,8 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
     config.timeoutIntervalForResource = timeout * 2;
     self.session = [NSURLSession sessionWithConfiguration:config];
 
-    NSLog(@"[AbuseIPDBProvider] Configured with API key (rate limit: %ld req/min, maxAge: %ld days, URL: %@)",
-          (long)maxRequestsPerMin, (long)self.maxAgeInDays, self.apiBaseURL);
+    SNBLogThreatIntelInfo("Configured with API key (rate limit: %ld req/min, maxAge: %ld days, URL: %{public}@)",
+                          (long)maxRequestsPerMin, (long)self.maxAgeInDays, self.apiBaseURL);
 
     if (completion) completion(nil);
 }
@@ -157,7 +158,7 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
             NSTimeInterval waitTime = 60.0 - [[NSDate date] timeIntervalSinceDate:oldestTimestamp];
 
             if (waitTime > 0) {
-                NSLog(@"[AbuseIPDBProvider] Rate limit reached, waiting %.1f seconds", waitTime);
+                SNBLogThreatIntelDebug("Rate limit reached, waiting %.1f seconds", waitTime);
                 [NSThread sleepForTimeInterval:waitTime];
                 [self.requestTimestamps removeObjectAtIndex:0];
             }
@@ -197,11 +198,11 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
     [request setValue:self.apiKey forHTTPHeaderField:@"Key"];
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
 
-    NSLog(@"[AbuseIPDBProvider] Querying IP: %@", indicator.value);
+    SNBLogThreatIntelDebug("Querying IP: %{" SNB_IP_PRIVACY "}@", indicator.value);
 
     NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error) {
-            NSLog(@"[AbuseIPDBProvider] Request failed: %@", error.localizedDescription);
+            SNBLogThreatIntelWarn("Request failed: %{public}@", error.localizedDescription);
             if (completion) completion(nil, error);
             return;
         }
@@ -219,7 +220,7 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
 
         if (httpResponse.statusCode == 422) {
             // Invalid IP address or parameter
-            NSLog(@"[AbuseIPDBProvider] Invalid IP or parameters: %@", indicator.value);
+            SNBLogThreatIntelDebug("Invalid IP or parameters: %{" SNB_IP_PRIVACY "}@", indicator.value);
             TIResult *result = [self createCleanResult:indicator];
             if (completion) completion(result, nil);
             return;
@@ -227,7 +228,7 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
 
         if (httpResponse.statusCode == 429) {
             // Rate limit exceeded - implement exponential backoff retry
-            NSLog(@"[AbuseIPDBProvider] WARNING: Rate limit (429) exceeded for IP: %@", indicator.value);
+            SNBLogThreatIntelWarn("Rate limit (429) exceeded for IP: %{" SNB_IP_PRIVACY "}@", indicator.value);
 
             // Extract retry-after header if available
             NSString *retryAfterHeader = httpResponse.allHeaderFields[@"Retry-After"];
@@ -236,7 +237,7 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
             // Cap maximum retry delay at 120 seconds
             retryDelay = MIN(retryDelay, 120.0);
 
-            NSLog(@"[AbuseIPDBProvider] Retrying in %.0f seconds...", retryDelay);
+            SNBLogThreatIntelInfo("Retrying in %.0f seconds...", retryDelay);
 
             // Schedule retry with exponential backoff
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(retryDelay * NSEC_PER_SEC)),
@@ -260,7 +261,7 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
 
         if (parseError || !json) {
-            NSLog(@"[AbuseIPDBProvider] Failed to parse JSON: %@", parseError.localizedDescription);
+            SNBLogThreatIntelWarn("Failed to parse JSON: %{public}@", parseError.localizedDescription);
             if (completion) completion(nil, parseError);
             return;
         }
@@ -310,9 +311,9 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
     id lastReportedAtObj = data[@"lastReportedAt"];
     NSString *lastReportedAt = [lastReportedAtObj isKindOfClass:[NSString class]] ? lastReportedAtObj : nil;
 
-    NSLog(@"[AbuseIPDBProvider] %@ - Confidence: %ld%%, Reports: %ld, Users: %ld, Whitelisted: %@",
-          indicator.value, (long)abuseConfidenceScore, (long)totalReports, (long)numDistinctUsers,
-          isWhitelisted ? @"YES" : @"NO");
+    SNBLogThreatIntelInfo("%{" SNB_IP_PRIVACY "}@ - Confidence: %ld%%, Reports: %ld, Users: %ld, Whitelisted: %{public}@",
+                          indicator.value, (long)abuseConfidenceScore, (long)totalReports, (long)numDistinctUsers,
+                          isWhitelisted ? @"YES" : @"NO");
 
     // Determine if malicious (abuse confidence > 50% or whitelisted but has reports)
     BOOL isMalicious = (abuseConfidenceScore > 50) || (!isWhitelisted && totalReports > 5);

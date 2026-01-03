@@ -11,6 +11,7 @@
 #import "ExpiringCache.h"
 #import "IPAddressUtilities.h"
 #import "UserDefaultsKeys.h"
+#import "Logger.h"
 #import <WebKit/WebKit.h>
 #import <CoreLocation/CoreLocation.h>
 
@@ -121,10 +122,10 @@
 
     NSUInteger expiredCount = [self.locationCache cleanupAndReturnExpiredCount];
     if (expiredCount > 0) {
-        SNBLog(@"MapMenuView: cleaned up %lu expired location cache entries",
+        SNBLogUIDebug(": cleaned up %lu expired location cache entries",
                (unsigned long)expiredCount);
     }
-    SNBLog(@"MapMenuView update: %lu connections", (unsigned long)connections.count);
+    SNBLogUIDebug(" update: %lu connections", (unsigned long)connections.count);
     [self updatePublicIPLocationIfNeeded];
     if (connections.count == 0) {
         [self refreshMarkers];
@@ -146,12 +147,12 @@
         if ([self shouldGeolocateIPAddress:ip]) {
             [targetIps addObject:ip];
         } else {
-            SNBLog(@"MapMenuView skip local IP: %@", ip);
+            SNBLogUIDebug(" skip local IP: %{public}@", ip);
         }
     }
     self.lastTargetIPs = [targetIps.allObjects sortedArrayUsingSelector:@selector(compare:)];
     
-    SNBLog(@"MapMenuView target IPs: %@", targetIps);
+    SNBLogUIDebug(" target IPs: %{public}@", targetIps);
     
     BOOL canLookup = YES;
     if ([self.providerName isEqualToString:@"custom"]) {
@@ -177,7 +178,7 @@
                     [self.failedLookups addObject:ip];
                     return;
                 }
-                SNBLog(@"MapMenuView pin ready for %@ (%f, %f)", ip, coord.latitude, coord.longitude);
+                SNBLogUIDebug(" pin ready for %{public}@ (%f, %f)", ip, coord.latitude, coord.longitude);
                 [self refreshMarkers];
             });
         }];
@@ -198,10 +199,10 @@
         return;
     }
     
-    SNBLog(@"MapMenuView public IP lookup via %@", url.absoluteString);
+    SNBLogUIDebug(" public IP lookup via %{public}@", url.absoluteString);
     NSURLSessionDataTask *task = [self.session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error || !data) {
-            SNBLog(@"MapMenuView public IP lookup failed: %@", error.localizedDescription);
+            SNBLogUIDebug(" public IP lookup failed: %{public}@", error.localizedDescription);
             self.publicIPLookupInFlight = NO;
             return;
         }
@@ -209,29 +210,29 @@
         NSError *jsonError;
         id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
         if (jsonError || ![json isKindOfClass:[NSDictionary class]]) {
-            SNBLog(@"MapMenuView public IP JSON error: %@", jsonError.localizedDescription);
+            SNBLogUIDebug(" public IP JSON error: %{public}@", jsonError.localizedDescription);
             self.publicIPLookupInFlight = NO;
             return;
         }
         
         NSString *ip = json[@"ip"];
         if (ip.length == 0) {
-            SNBLog(@"MapMenuView public IP missing in response");
+            SNBLogUIDebug(" public IP missing in response");
             self.publicIPLookupInFlight = NO;
             return;
         }
         
-        SNBLog(@"MapMenuView public IP: %@", ip);
+        SNBLogUIDebug(" public IP: %{public}@", ip);
         self.publicIPAddress = ip;
         [self fetchLocationForIP:ip completion:^(CLLocationCoordinate2D coord, BOOL success) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.publicIPLookupInFlight = NO;
                 if (!success) {
-                    SNBLog(@"MapMenuView public IP geolocation failed: %@", ip);
+                    SNBLogUIDebug(" public IP geolocation failed: %{public}@", ip);
                     return;
                 }
                 self.publicIPCoordinate = [NSValue valueWithBytes:&coord objCType:@encode(CLLocationCoordinate2D)];
-                SNBLog(@"MapMenuView public IP located: %@ => (%f, %f)", ip, coord.latitude, coord.longitude);
+                SNBLogUIDebug(" public IP located: %{public}@ => (%f, %f)", ip, coord.latitude, coord.longitude);
                 [self refreshMarkers];
             });
         }];
@@ -276,7 +277,7 @@
     NSError *jsonError;
     NSData *data = [NSJSONSerialization dataWithJSONObject:points options:0 error:&jsonError];
     if (!data) {
-        SNBLog(@"MapMenuView JSON encode error: %@", jsonError.localizedDescription);
+        SNBLogUIDebug(" JSON encode error: %{public}@", jsonError.localizedDescription);
         return;
     }
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
@@ -327,22 +328,22 @@
                            @"dstLon": @(dstCoord.longitude),
                            @"title": lineTitle}];
     }
-    SNBLog(@"MapMenuView: created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)self.lastConnections.count);
+    SNBLogUIDebug(": created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)self.lastConnections.count);
     if (lines.count > 0) {
-        SNBLog(@"MapMenuView: First line example: %@", lines[0]);
+        SNBLogUIDebug(": First line example: %{public}@", lines[0]);
     }
 
     NSData *lineData = [NSJSONSerialization dataWithJSONObject:lines options:0 error:&jsonError];
     if (!lineData) {
-        SNBLog(@"MapMenuView JSON encode error (lines): %@", jsonError.localizedDescription);
+        SNBLogUIDebug(" JSON encode error (lines): %{public}@", jsonError.localizedDescription);
         return;
     }
     NSString *lineJson = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
-    SNBLog(@"MapMenuView: Line JSON being sent: %@", lineJson);
+    SNBLogUIDebug(": Line JSON being sent: %{public}@", lineJson);
     NSString *script = [NSString stringWithFormat:@"window.SniffNetBar && window.SniffNetBar.setMarkers(%@, %@);", json, lineJson];
     [self.webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
         if (error) {
-            SNBLog(@"MapMenuView JS error: %@", error.localizedDescription);
+            SNBLogUIDebug(" JS error: %{public}@", error.localizedDescription);
         }
     }];
 }
@@ -455,21 +456,21 @@
         return;
     }
     
-    SNBLog(@"MapMenuView lookup %@ via %@", ip, urlString);
+    SNBLogUIDebug(" lookup %{public}@ via %{public}@", ip, urlString);
     
     NSURLSessionDataTask *task = [self.session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
         if (error || !data) {
-            SNBLog(@"MapMenuView lookup failed for %@: %@", ip, error.localizedDescription);
+            SNBLogUIDebug(" lookup failed for %{public}@: %{public}@", ip, error.localizedDescription);
             completion(kCLLocationCoordinate2DInvalid, NO);
             return;
         }
         if (httpResponse) {
-            SNBLog(@"MapMenuView response %@ status %ld", ip, (long)httpResponse.statusCode);
+            SNBLogUIDebug(" response %{public}@ status %ld", ip, (long)httpResponse.statusCode);
         }
         
         if ([provider isEqualToString:@"ip-api.com"] && httpResponse.statusCode == 403) {
-            SNBLog(@"MapMenuView fallback to ipinfo.io for %@", ip);
+            SNBLogUIDebug(" fallback to ipinfo.io for %{public}@", ip);
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *savedProvider = self.providerName;
                 self.providerName = @"ipinfo.io";
@@ -482,7 +483,7 @@
         NSError *jsonError;
         id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
         if (jsonError || ![json isKindOfClass:[NSDictionary class]]) {
-            SNBLog(@"MapMenuView JSON error for %@: %@", ip, jsonError.localizedDescription);
+            SNBLogUIDebug(" JSON error for %{public}@: %{public}@", ip, jsonError.localizedDescription);
             completion(kCLLocationCoordinate2DInvalid, NO);
             return;
         }
@@ -547,7 +548,7 @@
         }
         
         if (success) {
-            SNBLog(@"MapMenuView location %@ => (%f, %f)", ip, lat, lon);
+            SNBLogUIDebug(" location %{public}@ => (%f, %f)", ip, lat, lon);
             NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:@{@"lat": @(lat), @"lon": @(lon)}];
             if (name.length > 0) {
                 payload[@"name"] = name;
@@ -560,7 +561,7 @@
                 completion(CLLocationCoordinate2DMake(lat, lon), YES);
             });
         } else {
-            SNBLog(@"MapMenuView location missing for %@ (%@)", ip, provider);
+            SNBLogUIDebug(" location missing for %{public}@ (%{public}@)", ip, provider);
             completion(kCLLocationCoordinate2DInvalid, NO);
         }
     }];

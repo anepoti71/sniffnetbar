@@ -8,6 +8,7 @@
 #import "TrafficStatistics.h"
 #import "PacketInfo.h"
 #import "ExpiringCache.h"
+#import "Logger.h"
 #import <sys/socket.h>
 #import <netinet/in.h>
 #import <arpa/inet.h>
@@ -144,7 +145,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         }
 
         if (expiredCount > 0 || self.statsCacheDirty) {
-            NSLog(@"Cache cleanup: removed %lu expired hostnames, %lu hosts, %lu connections",
+            SNBLogDebug("Cache cleanup: removed %lu expired hostnames, %lu hosts, %lu connections",
                   (unsigned long)expiredCount,
                   (unsigned long)MAX(0, (NSInteger)self.hostStats.count - (NSInteger)kMaxHostCacheSize),
                   (unsigned long)MAX(0, (NSInteger)self.connectionStats.count - (NSInteger)kMaxConnectionCacheSize));
@@ -303,7 +304,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         @synchronized(lock) {  // Use dedicated lock object
             if (!lookupCompleted) {
                 lookupCompleted = YES;
-                NSLog(@"WARNING: DNS lookup timeout (%.0fs) for %@", kDNSLookupTimeout, address);
+                SNBLogWarn("DNS lookup timeout (%.0fs) for %{" SNB_IP_PRIVACY "}@", kDNSLookupTimeout, address);
                 dispatch_group_leave(group);
             }
         }

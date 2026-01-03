@@ -42,7 +42,7 @@ THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/Providers/VirusTotalProvider.m \
                       ThreatIntel/Providers/AbuseIPDBProvider.m
 UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m
-UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m
+UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m
 
 # Test sources
 TEST_SOURCES = Tests/ThreatIntel/ThreatIntelCacheTests.m \
@@ -90,17 +90,17 @@ $(RESOURCES_DIR):
 # Command-line tools for API key management
 tools: $(BUILD_DIR)/set_apikey $(BUILD_DIR)/remove_apikey $(BUILD_DIR)/list_apikeys
 
-$(BUILD_DIR)/set_apikey: Scripts/set_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o
+$(BUILD_DIR)/set_apikey: Scripts/set_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o
 	@echo "Building set_apikey tool..."
-	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/set_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o -o $(BUILD_DIR)/set_apikey $(FRAMEWORKS)
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/set_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o -o $(BUILD_DIR)/set_apikey $(FRAMEWORKS)
 
-$(BUILD_DIR)/remove_apikey: Scripts/remove_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o
+$(BUILD_DIR)/remove_apikey: Scripts/remove_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o
 	@echo "Building remove_apikey tool..."
-	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/remove_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o -o $(BUILD_DIR)/remove_apikey $(FRAMEWORKS)
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/remove_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o -o $(BUILD_DIR)/remove_apikey $(FRAMEWORKS)
 
-$(BUILD_DIR)/list_apikeys: Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o
+$(BUILD_DIR)/list_apikeys: Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o
 	@echo "Building list_apikeys tool..."
-	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o -o $(BUILD_DIR)/list_apikeys $(FRAMEWORKS)
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o -o $(BUILD_DIR)/list_apikeys $(FRAMEWORKS)
 
 clean:
 	rm -rf $(BUILD_DIR)

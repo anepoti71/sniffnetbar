@@ -11,6 +11,7 @@
 #import "VirusTotalProvider.h"
 #import "AbuseIPDBProvider.h"
 #import "IPAddressUtilities.h"
+#import "Logger.h"
 
 @interface ThreatIntelCoordinator ()
 @property (nonatomic, strong) ConfigurationManager *configuration;
@@ -49,17 +50,17 @@
                        maxRequestsPerMin:config.virusTotalMaxRequestsPerMin
                               completion:^(NSError *error) {
             if (error) {
-                NSLog(@"[ThreatIntelCoordinator] Failed to configure VirusTotal: %@", error.localizedDescription);
+                SNBLogThreatIntelError("Failed to configure VirusTotal: %{public}@", error.localizedDescription);
             } else {
-                SNBLog(@"VirusTotal provider configured successfully");
+                SNBLogThreatIntelInfo("VirusTotal provider configured successfully");
             }
         }];
         [self.facade addProvider:vtProvider];
-        SNBLog(@"VirusTotal provider added");
+        SNBLogThreatIntelDebug("VirusTotal provider added");
     } else {
-        SNBLog(@"VirusTotal provider disabled (enabled: %@, has key: %@)",
-               config.virusTotalEnabled ? @"YES" : @"NO",
-               config.virusTotalAPIKey.length > 0 ? @"YES" : @"NO");
+        SNBLogThreatIntelDebug("VirusTotal provider disabled (enabled: %{public}@, has key: %{public}@)",
+                               config.virusTotalEnabled ? @"YES" : @"NO",
+                               config.virusTotalAPIKey.length > 0 ? @"YES" : @"NO");
     }
 
     if (config.abuseIPDBEnabled && config.abuseIPDBAPIKey.length > 0) {
@@ -72,20 +73,20 @@
                           maxRequestsPerMin:config.abuseIPDBMaxRequestsPerMin
                                  completion:^(NSError *error) {
             if (error) {
-                NSLog(@"[ThreatIntelCoordinator] Failed to configure AbuseIPDB: %@", error.localizedDescription);
+                SNBLogThreatIntelError("Failed to configure AbuseIPDB: %{public}@", error.localizedDescription);
             } else {
-                SNBLog(@"AbuseIPDB provider configured successfully");
+                SNBLogThreatIntelInfo("AbuseIPDB provider configured successfully");
             }
         }];
         [self.facade addProvider:abuseProvider];
-        SNBLog(@"AbuseIPDB provider added");
+        SNBLogThreatIntelDebug("AbuseIPDB provider added");
     } else {
-        SNBLog(@"AbuseIPDB provider disabled (enabled: %@, has key: %@)",
-               config.abuseIPDBEnabled ? @"YES" : @"NO",
-               config.abuseIPDBAPIKey.length > 0 ? @"YES" : @"NO");
+        SNBLogThreatIntelDebug("AbuseIPDB provider disabled (enabled: %{public}@, has key: %{public}@)",
+                               config.abuseIPDBEnabled ? @"YES" : @"NO",
+                               config.abuseIPDBAPIKey.length > 0 ? @"YES" : @"NO");
     }
 
-    SNBLog(@"Threat Intelligence initialized (enabled: %@)", self.isEnabled ? @"YES" : @"NO");
+    SNBLogThreatIntelInfo("Threat Intelligence initialized (enabled: %{public}@)", self.isEnabled ? @"YES" : @"NO");
 }
 
 - (void)toggleEnabled {
@@ -98,7 +99,7 @@
     [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:SNBUserDefaultsKeyThreatIntelEnabled];
     [[NSUserDefaults standardUserDefaults] synchronize];
 
-    SNBLog(@"Threat Intelligence %@", enabled ? @"ENABLED" : @"DISABLED");
+    SNBLogThreatIntelInfo("Threat Intelligence %{public}@", enabled ? @"ENABLED" : @"DISABLED");
 
     if (!enabled) {
         [self.results removeAllObjects];
@@ -118,7 +119,7 @@
         return;
     }
     if (![IPAddressUtilities isPublicIPAddress:ipAddress]) {
-        SNBLog(@"Skipping threat intel for private/local IP: %@", ipAddress);
+        SNBLogThreatIntelDebug("Skipping threat intel for private/local IP: %{" SNB_IP_PRIVACY "}@", ipAddress);
         return;
     }
     if (self.results[ipAddress]) {
@@ -130,8 +131,8 @@
             self.results[ipAddress] = response;
 
             TIScoringResult *scoring = response.scoringResult;
-            SNBLog(@"Threat Intel: %@ -> %@ (score: %ld, confidence: %.2f)",
-                   ipAddress, [scoring verdictString], (long)scoring.finalScore, scoring.confidence);
+            SNBLogThreatIntelInfo("Threat Intel: %{" SNB_IP_PRIVACY "}@ -> %{public}@ (score: %ld, confidence: %.2f)",
+                                  ipAddress, [scoring verdictString], (long)scoring.finalScore, scoring.confidence);
 
             if (completion) {
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -139,7 +140,7 @@
                 });
             }
         } else if (error) {
-            SNBLog(@"Threat Intel error for %@: %@", ipAddress, error.localizedDescription);
+            SNBLogThreatIntelWarn("Threat Intel error for %{" SNB_IP_PRIVACY "}@: %{public}@", ipAddress, error.localizedDescription);
         }
     }];
 }

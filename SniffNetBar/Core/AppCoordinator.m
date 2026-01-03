@@ -13,6 +13,7 @@
 #import "PacketCaptureManager.h"
 #import "PacketInfo.h"
 #import "ThreatIntelCoordinator.h"
+#import "Logger.h"
 #import "TrafficStatistics.h"
 
 @interface AppCoordinator ()
@@ -174,7 +175,7 @@
 
 - (void)toggleShowMap:(NSMenuItem *)sender {
     self.menuBuilder.showMap = !self.menuBuilder.showMap;
-    SNBLog(@"Map visualization toggled: %@", self.menuBuilder.showMap ? @"ON" : @"OFF");
+    SNBLogInfo("Map visualization toggled: %{public}@", self.menuBuilder.showMap ? @"ON" : @"OFF");
     [self updateMenu];
 }
 

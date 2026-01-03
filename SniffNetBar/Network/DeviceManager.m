@@ -8,6 +8,7 @@
 #import "NetworkDevice.h"
 #import "PacketCaptureManager.h"
 #import "UserDefaultsKeys.h"
+#import "Logger.h"
 #import <math.h>
 
 @interface DeviceManager ()
@@ -33,7 +34,7 @@
 - (void)loadAvailableDevices {
     self.availableDevices = [NetworkDevice listAllDevices];
     if (self.availableDevices.count == 0) {
-        SNBLog(@"Warning: No network devices found");
+        SNBLogNetworkWarn("No network devices found");
     }
 }
 
@@ -67,7 +68,7 @@
     }
 
     if (!self.selectedDevice || [self.selectedDevice.name isEqualToString:@"(no device)"]) {
-        SNBLog(@"ERROR: No valid network device available for capture");
+        SNBLogNetworkError("No valid network device available for capture");
         if (error) {
             *error = [NSError errorWithDomain:@"DeviceManager"
                                          code:1
@@ -78,7 +79,7 @@
 
     NSError *startError = nil;
     if (![self.packetManager startCaptureWithDeviceName:self.selectedDevice.name error:&startError]) {
-        SNBLog(@"ERROR: Failed to start packet capture: %@", startError.localizedDescription);
+        SNBLogNetworkError("Failed to start packet capture: %{public}@", startError.localizedDescription);
         if (error) {
             *error = startError;
         }
@@ -93,7 +94,7 @@
     self.packetManager.onCaptureError = ^(NSError *captureError) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf) {
-            SNBLog(@"WARNING: Capture error occurred: %@", captureError.localizedDescription);
+            SNBLogNetworkWarn("Capture error occurred: %{public}@", captureError.localizedDescription);
             [strongSelf handleCaptureFailure:captureError];
         }
     };
@@ -102,12 +103,12 @@
 }
 
 - (void)handleCaptureFailure:(NSError *)error {
-    SNBLog(@"WARNING: Handling capture failure, will attempt reconnection");
+    SNBLogNetworkWarn("Handling capture failure, will attempt reconnection");
     [self scheduleReconnection];
 }
 
 - (void)attemptReconnection {
-    SNBLog(@"Attempting to reconnect to device: %@", self.selectedDevice.name);
+    SNBLogNetworkInfo("Attempting to reconnect to device: %{public}@", self.selectedDevice.name);
     [self refreshDeviceList];
     [self startCaptureWithError:nil];
 }
@@ -122,10 +123,10 @@
         NSTimeInterval exponentialDelay = config.reconnectDelay * pow(2, self.reconnectAttempts - 1);
         exponentialDelay = MIN(exponentialDelay, 60.0);
 
-        SNBLog(@"WARNING: Scheduling reconnection attempt %lu of %lu in %.1f seconds (exponential backoff)",
-               (unsigned long)self.reconnectAttempts,
-               (unsigned long)config.maxReconnectAttempts,
-               exponentialDelay);
+        SNBLogNetworkWarn("Scheduling reconnection attempt %lu of %lu in %.1f seconds (exponential backoff)",
+                          (unsigned long)self.reconnectAttempts,
+                          (unsigned long)config.maxReconnectAttempts,
+                          exponentialDelay);
 
         __weak typeof(self) weakSelf = self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(exponentialDelay * NSEC_PER_SEC)),
@@ -133,7 +134,7 @@
             [weakSelf attemptReconnection];
         });
     } else {
-        SNBLog(@"ERROR: Maximum reconnection attempts reached. Manual intervention required.");
+        SNBLogNetworkError("Maximum reconnection attempts reached. Manual intervention required.");
     }
 }
 
@@ -142,9 +143,9 @@
     [self loadAvailableDevices];
 
     if (previousDevices.count != self.availableDevices.count) {
-        SNBLog(@"INFO: Device list changed: %lu -> %lu devices",
-               (unsigned long)previousDevices.count,
-               (unsigned long)self.availableDevices.count);
+        SNBLogNetworkInfo("Device list changed: %lu -> %lu devices",
+                          (unsigned long)previousDevices.count,
+                          (unsigned long)self.availableDevices.count);
     }
 
     BOOL deviceStillAvailable = NO;
@@ -156,7 +157,7 @@
     }
 
     if (!deviceStillAvailable && self.selectedDevice) {
-        SNBLog(@"WARNING: Currently selected device '%@' is no longer available", self.selectedDevice.name);
+        SNBLogNetworkWarn("Currently selected device '%{public}@' is no longer available", self.selectedDevice.name);
     }
 }
 

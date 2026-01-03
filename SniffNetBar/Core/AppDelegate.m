@@ -8,6 +8,7 @@
 #import "AppDelegate.h"
 #import "AppCoordinator.h"
 #import "ConfigurationManager.h"
+#import "Logger.h"
 
 @implementation AppDelegate
 
@@ -28,7 +29,7 @@
         self.statusItem.button.imageScaling = NSImageScaleProportionallyDown;
         self.statusItem.button.title = @"";
     } else {
-        SNBLog(@"Status icon not found in bundle resources.");
+        SNBLogError("Status icon not found in bundle resources.");
         self.statusItem.button.title = @"📊";
     }
     self.statusItem.button.target = self;

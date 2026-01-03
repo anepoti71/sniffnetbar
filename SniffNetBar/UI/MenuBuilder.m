@@ -11,6 +11,7 @@
 #import "ThreatIntelModels.h"
 #import "TrafficStatistics.h"
 #import "UserDefaultsKeys.h"
+#import "Logger.h"
 
 @interface MenuBuilder ()
 @property (nonatomic, strong) NSMenu *statusMenu;
@@ -430,7 +431,7 @@
                                                                     multiplier:1.0
                                                                       constant:config.mapMenuViewHeight]];
 
-        SNBLog(@"Map menu view created with constraints: width=%.0f, height=%.0f",
+        SNBLogUIDebug("Map menu view created with constraints: width=%.0f, height=%.0f",
                config.menuFixedWidth, config.mapMenuViewHeight);
     }
     return self.mapMenuItem;
@@ -441,13 +442,13 @@
         self.mapMenuItem.view = nil;
         self.mapMenuItem = nil;
         self.mapMenuView = nil;
-        SNBLog(@"Map menu view released");
+        SNBLogUIDebug("Map menu view released");
     }
 }
 
 - (void)menuWillOpenWithStats:(TrafficStats *)stats {
     self.menuIsOpen = YES;
-    SNBLog(@"Status menu opened");
+    SNBLogUIDebug("Status menu opened");
     if (self.showMap && self.mapMenuView) {
         [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];
     }
@@ -455,7 +456,7 @@
 
 - (void)menuDidClose {
     self.menuIsOpen = NO;
-    SNBLog(@"Status menu closed");
+    SNBLogUIDebug("Status menu closed");
     [self tearDownMapMenuItem];
 }
 
@@ -467,7 +468,7 @@
     self.mapProviderName = providerValue;
     [[NSUserDefaults standardUserDefaults] setObject:self.mapProviderName
                                               forKey:SNBUserDefaultsKeyMapProvider];
-    SNBLog(@"Map provider selected: %@", self.mapProviderName);
+    SNBLogUIDebug("Map provider selected: %{public}@", self.mapProviderName);
     if (self.mapMenuView) {
         self.mapMenuView.providerName = self.mapProviderName;
         if (self.showMap && stats) {

@@ -7,6 +7,7 @@
 
 #import "ConfigurationManager.h"
 #import "KeychainManager.h"
+#import "Logger.h"
 
 // Define keychain identifier constants
 NSString * const kVirusTotalAPIKeyIdentifier = @"VirusTotalAPIKey";
@@ -17,6 +18,12 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
 @end
 
 @implementation ConfigurationManager
+
+static BOOL sConfigurationManagerInitializing = NO;
+
+BOOL SNBConfigurationManagerIsInitializing(void) {
+    return sConfigurationManagerInitializing;
+}
 
 + (instancetype)sharedManager {
     static ConfigurationManager *sharedInstance = nil;
@@ -30,7 +37,9 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
 - (instancetype)init {
     self = [super init];
     if (self) {
+        sConfigurationManagerInitializing = YES;
         [self loadConfiguration];
+        sConfigurationManagerInitializing = NO;
     }
     return self;
 }
@@ -38,24 +47,24 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
 - (void)loadConfiguration {
     NSString *path = [[NSBundle mainBundle] pathForResource:@"Configuration" ofType:@"plist"];
     if (!path) {
-        NSLog(@"[ConfigurationManager] ERROR: Configuration.plist not found in bundle!");
+        SNBLogConfigError("Configuration.plist not found in bundle!");
         [self loadDefaultConfiguration];
         return;
     }
 
     NSDictionary *config = [NSDictionary dictionaryWithContentsOfFile:path];
     if (!config) {
-        NSLog(@"[ConfigurationManager] ERROR: Failed to load Configuration.plist!");
+        SNBLogConfigError("Failed to load Configuration.plist!");
         [self loadDefaultConfiguration];
         return;
     }
 
     self.configuration = config;
-    NSLog(@"[ConfigurationManager] Configuration loaded successfully from %@", path);
+    SNBLogConfigInfo("Configuration loaded successfully from %{public}@", path);
     NSError *validationError = nil;
     if (![self validateConfiguration:&validationError]) {
-        NSLog(@"[ConfigurationManager] Configuration validation failed: %@",
-              validationError.localizedDescription);
+        SNBLogConfigError("Configuration validation failed: %{public}@",
+                          validationError.localizedDescription);
     }
 }
 
@@ -79,11 +88,11 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
         @"ConnectionLineWeight": @3,
         @"ConnectionLineOpacity": @0.9
     };
-    NSLog(@"[ConfigurationManager] Using default configuration");
+    SNBLogConfigInfo("Using default configuration");
     NSError *validationError = nil;
     if (![self validateConfiguration:&validationError]) {
-        NSLog(@"[ConfigurationManager] Default configuration validation failed: %@",
-              validationError.localizedDescription);
+        SNBLogConfigError("Default configuration validation failed: %{public}@",
+                          validationError.localizedDescription);
     }
 }
 
@@ -297,7 +306,7 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
         [KeychainManager saveAPIKey:plistKey
                       forIdentifier:kVirusTotalAPIKeyIdentifier
                               error:nil];
-        NSLog(@"[ConfigurationManager] Migrated VirusTotal API key to keychain");
+        SNBLogConfigInfo("Migrated VirusTotal API key to keychain");
         return plistKey;
     }
 
@@ -347,7 +356,7 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
         [KeychainManager saveAPIKey:plistKey
                       forIdentifier:kAbuseIPDBAPIKeyIdentifier
                               error:nil];
-        NSLog(@"[ConfigurationManager] Migrated AbuseIPDB API key to keychain");
+        SNBLogConfigInfo("Migrated AbuseIPDB API key to keychain");
         return plistKey;
     }
 
@@ -379,10 +388,10 @@ NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
 - (void)setAPIKey:(nullable NSString *)apiKey forIdentifier:(NSString *)identifier {
     NSError *error = nil;
     if ([KeychainManager saveAPIKey:apiKey forIdentifier:identifier error:&error]) {
-        NSLog(@"[ConfigurationManager] API key saved to keychain: %@", identifier);
+        SNBLogConfigInfo("API key saved to keychain: %{public}@", identifier);
     } else {
-        NSLog(@"[ConfigurationManager] Failed to save API key to keychain: %@, error: %@",
-              identifier, error.localizedDescription);
+        SNBLogConfigError("Failed to save API key to keychain: %{public}@, error: %{public}@",
+                          identifier, error.localizedDescription);
     }
 }
 

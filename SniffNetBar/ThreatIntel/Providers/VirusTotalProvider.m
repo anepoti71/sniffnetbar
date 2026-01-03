@@ -6,6 +6,7 @@
 //
 
 #import "VirusTotalProvider.h"
+#import "Logger.h"
 
 static NSTimeInterval const kDefaultTTL = 86400.0;  // 24 hours
 static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
@@ -91,8 +92,8 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
     config.timeoutIntervalForResource = timeout * 2;
     self.session = [NSURLSession sessionWithConfiguration:config];
 
-    NSLog(@"[VirusTotalProvider] Configured with API key (rate limit: %ld req/min, URL: %@)",
-          (long)maxRequestsPerMin, self.apiBaseURL);
+    SNBLogThreatIntelInfo("Configured with API key (rate limit: %ld req/min, URL: %{public}@)",
+                          (long)maxRequestsPerMin, self.apiBaseURL);
 
     if (completion) completion(nil);
 }
@@ -152,7 +153,7 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
             NSTimeInterval waitTime = 60.0 - [[NSDate date] timeIntervalSinceDate:oldestTimestamp];
 
             if (waitTime > 0) {
-                NSLog(@"[VirusTotalProvider] Rate limit reached, waiting %.1f seconds", waitTime);
+                SNBLogThreatIntelDebug("Rate limit reached, waiting %.1f seconds", waitTime);
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(waitTime * NSEC_PER_SEC)),
                                self.rateLimitQueue, ^{
                     if (self.requestTimestamps.count > 0) {
@@ -182,11 +183,11 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
     [request setValue:self.apiKey forHTTPHeaderField:@"x-apikey"];
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
 
-    NSLog(@"[VirusTotalProvider] Querying IP: %@", indicator.value);
+    SNBLogThreatIntelDebug("Querying IP: %{" SNB_IP_PRIVACY "}@", indicator.value);
 
     NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error) {
-            NSLog(@"[VirusTotalProvider] Request failed: %@", error.localizedDescription);
+            SNBLogThreatIntelWarn("Request failed: %{public}@", error.localizedDescription);
             if (completion) completion(nil, error);
             return;
         }
@@ -204,7 +205,7 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
 
         if (httpResponse.statusCode == 404) {
             // IP not found in VT database - return clean result
-            NSLog(@"[VirusTotalProvider] IP not found in database: %@", indicator.value);
+            SNBLogThreatIntelDebug("IP not found in database: %{" SNB_IP_PRIVACY "}@", indicator.value);
             TIResult *result = [self createCleanResult:indicator];
             if (completion) completion(result, nil);
             return;
@@ -212,7 +213,7 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
 
         if (httpResponse.statusCode == 429) {
             // Rate limit exceeded - implement exponential backoff retry
-            NSLog(@"[VirusTotalProvider] WARNING: Rate limit (429) exceeded for IP: %@", indicator.value);
+            SNBLogThreatIntelWarn("Rate limit (429) exceeded for IP: %{" SNB_IP_PRIVACY "}@", indicator.value);
 
             // Extract retry-after header if available
             NSString *retryAfterHeader = httpResponse.allHeaderFields[@"Retry-After"];
@@ -221,7 +222,7 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
             // Cap maximum retry delay at 120 seconds
             retryDelay = MIN(retryDelay, 120.0);
 
-            NSLog(@"[VirusTotalProvider] Retrying in %.0f seconds...", retryDelay);
+            SNBLogThreatIntelInfo("Retrying in %.0f seconds...", retryDelay);
 
             // Schedule retry with exponential backoff
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(retryDelay * NSEC_PER_SEC)),
@@ -245,7 +246,7 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&parseError];
 
         if (parseError || !json) {
-            NSLog(@"[VirusTotalProvider] Failed to parse JSON: %@", parseError.localizedDescription);
+            SNBLogThreatIntelWarn("Failed to parse JSON: %{public}@", parseError.localizedDescription);
             if (completion) completion(nil, parseError);
             return;
         }
@@ -281,8 +282,8 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
 
     NSInteger totalVotes = harmless + malicious + suspicious + undetected + timeout;
 
-    NSLog(@"[VirusTotalProvider] %@ - Malicious: %ld, Suspicious: %ld, Harmless: %ld, Total: %ld",
-          indicator.value, (long)malicious, (long)suspicious, (long)harmless, (long)totalVotes);
+    SNBLogThreatIntelInfo("%{" SNB_IP_PRIVACY "}@ - Malicious: %ld, Suspicious: %ld, Harmless: %ld, Total: %ld",
+                          indicator.value, (long)malicious, (long)suspicious, (long)harmless, (long)totalVotes);
 
     // Calculate confidence (0-100)
     NSInteger confidence = 0;

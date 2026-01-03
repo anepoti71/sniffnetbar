@@ -89,12 +89,7 @@ extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 
 @end
 
-// Convenience logging macro that respects the debugLogging configuration
-#define SNBLog(fmt, ...) \
-    do { \
-        if ([ConfigurationManager sharedManager].debugLogging) { \
-            NSLog((@"[SniffNetBar] " fmt), ##__VA_ARGS__); \
-        } \
-    } while(0)
-
 NS_ASSUME_NONNULL_END
+
+// C helper for early startup logging to avoid recursive sharedManager access.
+BOOL SNBConfigurationManagerIsInitializing(void);
