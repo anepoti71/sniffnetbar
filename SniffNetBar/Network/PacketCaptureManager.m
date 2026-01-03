@@ -27,6 +27,8 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
 @property (nonatomic, assign) BOOL isCapturing;
 @property (nonatomic, strong) dispatch_queue_t captureQueue;
 @property (nonatomic, strong, readwrite) NSString *currentDeviceName;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *ipStringCache;
+@property (nonatomic, strong) dispatch_queue_t cacheQueue;
 @end
 
 @implementation PacketCaptureManager
@@ -36,6 +38,8 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
     if (self) {
         _captureQueue = dispatch_queue_create("com.sniffnetbar.capture", DISPATCH_QUEUE_SERIAL);
         dispatch_queue_set_specific(_captureQueue, kCaptureQueueKey, kCaptureQueueKey, NULL);
+        _cacheQueue = dispatch_queue_create("com.sniffnetbar.ipcache", DISPATCH_QUEUE_SERIAL);
+        _ipStringCache = [NSMutableDictionary dictionaryWithCapacity:256];
         _pcapHandle = NULL;
         _isCapturing = NO;
     }
@@ -102,9 +106,9 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
     if (!self.isCapturing) {
         return;
     }
-    
+
     self.isCapturing = NO;
-    
+
     if (self.pcapHandle) {
         pcap_breakloop(self.pcapHandle);
         void (^closeHandle)(void) = ^{
@@ -119,6 +123,39 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
             dispatch_sync(self.captureQueue, closeHandle);
         }
     }
+
+    // Clear IP string cache when stopping capture
+    dispatch_sync(self.cacheQueue, ^{
+        [self.ipStringCache removeAllObjects];
+    });
+}
+
+// String interning for IP addresses to reduce memory allocations
+- (NSString *)internIPString:(const char *)ipCString {
+    if (!ipCString) {
+        return nil;
+    }
+
+    NSString *key = [NSString stringWithUTF8String:ipCString];
+
+    __block NSString *internedString = nil;
+    dispatch_sync(self.cacheQueue, ^{
+        internedString = self.ipStringCache[key];
+        if (!internedString) {
+            // Cache miss - store the string
+            internedString = key;
+            self.ipStringCache[key] = internedString;
+
+            // Limit cache size to prevent unbounded growth
+            if (self.ipStringCache.count > 512) {
+                // Clear oldest entries (simple strategy: clear half the cache)
+                NSArray *keys = [self.ipStringCache.allKeys subarrayWithRange:NSMakeRange(0, 256)];
+                [self.ipStringCache removeObjectsForKeys:keys];
+            }
+        }
+    });
+
+    return internedString;
 }
 
 - (void)captureLoop {
@@ -145,7 +182,18 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
             continue;
         } else if (result == -1) {
             // Error
-            NSLog(@"Error reading packet: %s", pcap_geterr(self.pcapHandle));
+            const char *errorMsg = pcap_geterr(self.pcapHandle);
+            NSLog(@"WARNING: Error reading packet: %s", errorMsg);
+
+            // Notify error callback
+            if (self.onCaptureError) {
+                NSError *error = [NSError errorWithDomain:@"PacketCaptureError"
+                                                     code:3
+                                                 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:errorMsg]}];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self.onCaptureError(error);
+                });
+            }
             break;
         } else if (result == -2) {
             // Break loop
@@ -195,9 +243,10 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
         char dst_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &src_addr, src_str, INET_ADDRSTRLEN);
         inet_ntop(AF_INET, &dst_addr, dst_str, INET_ADDRSTRLEN);
-        
-        info.sourceAddress = [NSString stringWithUTF8String:src_str];
-        info.destinationAddress = [NSString stringWithUTF8String:dst_str];
+
+        // Use string interning to reduce memory allocations
+        info.sourceAddress = [self internIPString:src_str];
+        info.destinationAddress = [self internIPString:dst_str];
         
         // Parse transport layer
         const u_char *transport_packet = ip_packet + ip_header_len;
@@ -240,9 +289,10 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
         char dst_str[INET6_ADDRSTRLEN];
         inet_ntop(AF_INET6, &src_addr, src_str, INET6_ADDRSTRLEN);
         inet_ntop(AF_INET6, &dst_addr, dst_str, INET6_ADDRSTRLEN);
-        
-        info.sourceAddress = [NSString stringWithUTF8String:src_str];
-        info.destinationAddress = [NSString stringWithUTF8String:dst_str];
+
+        // Use string interning to reduce memory allocations
+        info.sourceAddress = [self internIPString:src_str];
+        info.destinationAddress = [self internIPString:dst_str];
         
         // IPv6 next header is at byte offset 6
         uint8_t next_header = ip_packet[6];

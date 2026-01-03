@@ -8,6 +8,7 @@
 #import "NetworkDevice.h"
 #import "PacketCaptureManager.h"
 #import "UserDefaultsKeys.h"
+#import <math.h>
 
 @interface DeviceManager ()
 @property (nonatomic, strong) ConfigurationManager *configuration;
@@ -66,7 +67,7 @@
     }
 
     if (!self.selectedDevice || [self.selectedDevice.name isEqualToString:@"(no device)"]) {
-        SNBLog(@"Error: No valid network device available for capture");
+        SNBLog(@"ERROR: No valid network device available for capture");
         if (error) {
             *error = [NSError errorWithDomain:@"DeviceManager"
                                          code:1
@@ -77,7 +78,7 @@
 
     NSError *startError = nil;
     if (![self.packetManager startCaptureWithDeviceName:self.selectedDevice.name error:&startError]) {
-        SNBLog(@"Failed to start packet capture: %@", startError.localizedDescription);
+        SNBLog(@"ERROR: Failed to start packet capture: %@", startError.localizedDescription);
         if (error) {
             *error = startError;
         }
@@ -86,7 +87,23 @@
     }
 
     self.reconnectAttempts = 0;
+
+    // Set up error callback to handle capture failures
+    __weak typeof(self) weakSelf = self;
+    self.packetManager.onCaptureError = ^(NSError *captureError) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf) {
+            SNBLog(@"WARNING: Capture error occurred: %@", captureError.localizedDescription);
+            [strongSelf handleCaptureFailure:captureError];
+        }
+    };
+
     return YES;
+}
+
+- (void)handleCaptureFailure:(NSError *)error {
+    SNBLog(@"WARNING: Handling capture failure, will attempt reconnection");
+    [self scheduleReconnection];
 }
 
 - (void)attemptReconnection {
@@ -99,17 +116,24 @@
     ConfigurationManager *config = self.configuration;
     if (self.reconnectAttempts < config.maxReconnectAttempts) {
         self.reconnectAttempts++;
-        SNBLog(@"Scheduling reconnection attempt %lu of %lu in %.0f seconds",
+
+        // Calculate exponential backoff delay: baseDelay * 2^(attempt-1)
+        // Capped at 60 seconds maximum
+        NSTimeInterval exponentialDelay = config.reconnectDelay * pow(2, self.reconnectAttempts - 1);
+        exponentialDelay = MIN(exponentialDelay, 60.0);
+
+        SNBLog(@"WARNING: Scheduling reconnection attempt %lu of %lu in %.1f seconds (exponential backoff)",
                (unsigned long)self.reconnectAttempts,
                (unsigned long)config.maxReconnectAttempts,
-               config.reconnectDelay);
+               exponentialDelay);
+
         __weak typeof(self) weakSelf = self;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(config.reconnectDelay * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(exponentialDelay * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             [weakSelf attemptReconnection];
         });
     } else {
-        SNBLog(@"Maximum reconnection attempts reached. Manual intervention required.");
+        SNBLog(@"ERROR: Maximum reconnection attempts reached. Manual intervention required.");
     }
 }
 
@@ -118,7 +142,7 @@
     [self loadAvailableDevices];
 
     if (previousDevices.count != self.availableDevices.count) {
-        SNBLog(@"Device list changed: %lu -> %lu devices",
+        SNBLog(@"INFO: Device list changed: %lu -> %lu devices",
                (unsigned long)previousDevices.count,
                (unsigned long)self.availableDevices.count);
     }
@@ -132,7 +156,7 @@
     }
 
     if (!deviceStillAvailable && self.selectedDevice) {
-        SNBLog(@"Currently selected device '%@' is no longer available", self.selectedDevice.name);
+        SNBLog(@"WARNING: Currently selected device '%@' is no longer available", self.selectedDevice.name);
     }
 }
 

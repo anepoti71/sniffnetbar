@@ -12,6 +12,7 @@
 @interface PacketCaptureManager : NSObject
 
 @property (nonatomic, copy) void (^onPacketReceived)(PacketInfo *packetInfo);
+@property (nonatomic, copy) void (^onCaptureError)(NSError *error);
 @property (nonatomic, strong, readonly) NSString *currentDeviceName;
 
 - (BOOL)startCaptureWithDeviceName:(NSString *)deviceName error:(NSError **)error;

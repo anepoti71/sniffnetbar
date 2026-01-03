@@ -6,7 +6,7 @@
 #import "ThreatIntelFacade.h"
 #import "ThreatIntelCache.h"
 #import "ConfigurationManager.h"
-#import <arpa/inet.h>
+#import "IPAddressUtilities.h"
 
 @interface ThreatIntelFacade ()
 @property (nonatomic, strong) NSMutableArray<id<ThreatIntelProvider>> *providers;
@@ -445,23 +445,25 @@
 }
 
 - (BOOL)isValidIPAddress:(NSString *)ip detectedType:(TIIndicatorType *)detectedType {
-    if (ip.length == 0) {
+    if (!ip || ip.length == 0) {
         return NO;
     }
-    struct in_addr ipv4;
-    if (inet_pton(AF_INET, ip.UTF8String, &ipv4) == 1) {
+
+    // Use centralized validation
+    if ([IPAddressUtilities isValidIPv4:ip]) {
         if (detectedType) {
             *detectedType = TIIndicatorTypeIPv4;
         }
         return YES;
     }
-    struct in6_addr ipv6;
-    if (inet_pton(AF_INET6, ip.UTF8String, &ipv6) == 1) {
+
+    if ([IPAddressUtilities isValidIPv6:ip]) {
         if (detectedType) {
             *detectedType = TIIndicatorTypeIPv6;
         }
         return YES;
     }
+
     return NO;
 }
 

@@ -113,65 +113,11 @@
     return [self.facade cacheStats];
 }
 
-- (BOOL)isPublicIPAddress:(NSString *)ipAddress {
-    if (!ipAddress || ipAddress.length == 0) {
-        return NO;
-    }
-
-    if ([ipAddress containsString:@"."]) {
-        if (![IPAddressUtilities isValidIPv4:ipAddress]) {
-            return NO;
-        }
-        if ([IPAddressUtilities isPrivateIPv4Address:ipAddress]) {
-            return NO;
-        }
-
-        NSArray *octets = [ipAddress componentsSeparatedByString:@"."];
-        NSInteger first = [octets[0] integerValue];
-
-        if (first >= 224 && first <= 239) {
-            return NO;
-        }
-        if (first >= 240) {
-            return NO;
-        }
-        if (first == 0) {
-            return NO;
-        }
-
-        return YES;
-    }
-
-    if ([ipAddress containsString:@":"]) {
-        NSString *lowerIP = [ipAddress lowercaseString];
-
-        if ([lowerIP isEqualToString:@"::1"] || [lowerIP hasPrefix:@"::1/"]) {
-            return NO;
-        }
-        if ([lowerIP hasPrefix:@"fe80:"]) {
-            return NO;
-        }
-        if ([lowerIP hasPrefix:@"fc"] || [lowerIP hasPrefix:@"fd"]) {
-            return NO;
-        }
-        if ([lowerIP hasPrefix:@"ff"]) {
-            return NO;
-        }
-        if ([lowerIP isEqualToString:@"::"]) {
-            return NO;
-        }
-
-        return YES;
-    }
-
-    return NO;
-}
-
 - (void)enrichIPIfNeeded:(NSString *)ipAddress completion:(dispatch_block_t)completion {
     if (!self.isEnabled) {
         return;
     }
-    if (![self isPublicIPAddress:ipAddress]) {
+    if (![IPAddressUtilities isPublicIPAddress:ipAddress]) {
         SNBLog(@"Skipping threat intel for private/local IP: %@", ipAddress);
         return;
     }

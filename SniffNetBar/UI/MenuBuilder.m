@@ -20,6 +20,10 @@
 @property (nonatomic, strong) NSMenuItem *mapMenuItem;
 @property (nonatomic, copy, readwrite) NSString *mapProviderName;
 @property (nonatomic, assign, readwrite) BOOL menuIsOpen;
+@property (nonatomic, assign) uint64_t lastTotalBytes;
+@property (nonatomic, assign) uint64_t lastBytesPerSecond;
+@property (nonatomic, assign) NSUInteger lastTopHostsCount;
+@property (nonatomic, assign) NSUInteger lastTopConnectionsCount;
 @end
 
 @implementation MenuBuilder
@@ -142,6 +146,36 @@
     self.statusItem.button.title = rateDisplay;
 }
 
+// Helper method to determine if menu needs full rebuild
+- (BOOL)shouldRebuildMenuWithStats:(TrafficStats *)stats {
+    // Always rebuild when menu is first opened
+    if (self.statusMenu.itemArray.count == 0) {
+        return YES;
+    }
+
+    // Check if significant changes occurred
+    BOOL significantChange = NO;
+
+    // Check if number of hosts/connections changed significantly
+    NSUInteger currentHostsCount = stats.topHosts.count;
+    NSUInteger currentConnectionsCount = stats.topConnections.count;
+
+    if (currentHostsCount != self.lastTopHostsCount ||
+        currentConnectionsCount != self.lastTopConnectionsCount) {
+        significantChange = YES;
+    }
+
+    // Check if traffic changed by more than 10%
+    if (self.lastTotalBytes > 0) {
+        double changePercent = fabs((double)(stats.totalBytes - self.lastTotalBytes) / (double)self.lastTotalBytes);
+        if (changePercent > 0.10) {  // 10% change threshold
+            significantChange = YES;
+        }
+    }
+
+    return significantChange;
+}
+
 - (void)updateMenuWithStats:(TrafficStats *)stats
                     devices:(NSArray<NetworkDevice *> *)devices
              selectedDevice:(NetworkDevice *)selectedDevice
@@ -149,6 +183,19 @@
         threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                  cacheStats:(NSDictionary *)cacheStats
                      target:(id)target {
+
+    // Optimization: Only rebuild menu if there are significant changes
+    if (!self.menuIsOpen && ![self shouldRebuildMenuWithStats:stats]) {
+        // Menu is closed and no significant changes - skip rebuild
+        return;
+    }
+
+    // Update tracking values
+    self.lastTotalBytes = stats.totalBytes;
+    self.lastBytesPerSecond = stats.bytesPerSecond;
+    self.lastTopHostsCount = stats.topHosts.count;
+    self.lastTopConnectionsCount = stats.topConnections.count;
+
     [self.statusMenu removeAllItems];
 
     ConfigurationManager *config = self.configuration;

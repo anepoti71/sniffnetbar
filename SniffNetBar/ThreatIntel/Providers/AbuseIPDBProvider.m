@@ -226,10 +226,24 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
         }
 
         if (httpResponse.statusCode == 429) {
-            NSError *rateLimitError = [NSError errorWithDomain:@"AbuseIPDBProvider"
-                                                          code:1004
-                                                      userInfo:@{NSLocalizedDescriptionKey: @"Rate limit exceeded"}];
-            if (completion) completion(nil, rateLimitError);
+            // Rate limit exceeded - implement exponential backoff retry
+            NSLog(@"[AbuseIPDBProvider] WARNING: Rate limit (429) exceeded for IP: %@", indicator.value);
+
+            // Extract retry-after header if available
+            NSString *retryAfterHeader = httpResponse.allHeaderFields[@"Retry-After"];
+            NSTimeInterval retryDelay = retryAfterHeader ? [retryAfterHeader doubleValue] : 60.0;
+
+            // Cap maximum retry delay at 120 seconds
+            retryDelay = MIN(retryDelay, 120.0);
+
+            NSLog(@"[AbuseIPDBProvider] Retrying in %.0f seconds...", retryDelay);
+
+            // Schedule retry with exponential backoff
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(retryDelay * NSEC_PER_SEC)),
+                           dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                // Retry the request
+                [self performEnrichment:indicator completion:completion];
+            });
             return;
         }
 

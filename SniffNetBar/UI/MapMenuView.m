@@ -427,19 +427,8 @@
 }
 
 - (BOOL)shouldGeolocateIPAddress:(NSString *)ip {
-    if (ip.length == 0) {
-        return NO;
-    }
-    
-    if ([IPAddressUtilities isValidIPv4:ip] && [IPAddressUtilities isPrivateIPv4Address:ip]) {
-        return NO;
-    }
-    
-    if ([ip isEqualToString:@"::1"] || [ip hasPrefix:@"fe80:"] || [ip hasPrefix:@"fc"] || [ip hasPrefix:@"fd"]) {
-        return NO;
-    }
-    
-    return YES;
+    // Use centralized validation - only geolocate public IPs
+    return [IPAddressUtilities isPublicIPAddress:ip];
 }
 
 - (void)fetchLocationForIP:(NSString *)ip completion:(void (^)(CLLocationCoordinate2D, BOOL))completion {

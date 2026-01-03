@@ -23,6 +23,9 @@ static const NSTimeInterval kCacheExpirationTime = 3600; // 1 hour
 static const NSTimeInterval kCleanupInterval = 300; // 5 minutes
 static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 
+// Special marker for failed DNS lookups
+static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
+
 @interface TrafficStatistics ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, HostTraffic *> *hostStats;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, ConnectionTraffic *> *connectionStats;
@@ -189,8 +192,15 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
             if (!host) {
                 host = [[HostTraffic alloc] init];
                 host.address = remoteAddress;
-                host.hostname = [self.hostnameCache objectForKey:remoteAddress];
-                if (!host.hostname) {
+                NSString *cachedHostname = [self.hostnameCache objectForKey:remoteAddress];
+
+                // Check if we have a cached result (including negative results)
+                if (cachedHostname) {
+                    // If it's a failed lookup marker, don't set hostname (leave it nil)
+                    if (![cachedHostname isEqualToString:kDNSLookupFailedMarker]) {
+                        host.hostname = cachedHostname;
+                    }
+                } else {
                     // Perform reverse DNS lookup asynchronously
                     __weak typeof(self) weakSelf = self;
                     [self performReverseDNSLookup:remoteAddress completion:^(NSString *hostname) {
@@ -199,11 +209,15 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 
                         dispatch_async(strongSelf.statsQueue, ^{
                             if (hostname) {
+                                // Cache successful lookup
                                 [strongSelf.hostnameCache setObject:hostname forKey:remoteAddress];
                                 HostTraffic *h = strongSelf.hostStats[remoteAddress];
                                 if (h) {
                                     h.hostname = hostname;
                                 }
+                            } else {
+                                // Cache negative result to avoid repeated failed lookups
+                                [strongSelf.hostnameCache setObject:kDNSLookupFailedMarker forKey:remoteAddress];
                             }
                         });
                     }];
@@ -283,13 +297,13 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
         }
     });
 
-    // Set up timeout
+    // Set up timeout (5 seconds)
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kDNSLookupTimeout * NSEC_PER_SEC)),
                    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         @synchronized(lock) {  // Use dedicated lock object
             if (!lookupCompleted) {
                 lookupCompleted = YES;
-                NSLog(@"DNS lookup timeout for %@", address);
+                NSLog(@"WARNING: DNS lookup timeout (%.0fs) for %@", kDNSLookupTimeout, address);
                 dispatch_group_leave(group);
             }
         }
