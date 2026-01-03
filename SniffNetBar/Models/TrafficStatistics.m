@@ -321,57 +321,81 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
     });
 }
 
+- (TrafficStats *)currentStatsLocked {
+    TrafficStats *stats = [[TrafficStats alloc] init];
+    stats.totalBytes = self.totalBytes;
+    stats.incomingBytes = self.incomingBytes;
+    stats.outgoingBytes = self.outgoingBytes;
+    stats.totalPackets = self.totalPackets;
+
+    // Calculate bytes per second
+    NSDate *now = [NSDate date];
+    if (self.lastUpdateTime) {
+        NSTimeInterval elapsed = [now timeIntervalSinceDate:self.lastUpdateTime];
+        if (elapsed > 0) {
+            uint64_t bytesDiff = self.totalBytes - self.lastTotalBytes;
+            stats.bytesPerSecond = (uint64_t)(bytesDiff / elapsed);
+        }
+    }
+    self.lastUpdateTime = now;
+    self.lastTotalBytes = self.totalBytes;
+
+    // Use cached sorted results if available and cache is clean
+    if (self.statsCacheDirty || !self.cachedTopHosts || !self.cachedTopConnections) {
+        // Get top hosts sorted by bytes
+        NSArray<HostTraffic *> *hosts = [self.hostStats.allValues sortedArrayUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
+            if (obj1.bytes > obj2.bytes) {
+                return NSOrderedAscending;
+            } else if (obj1.bytes < obj2.bytes) {
+                return NSOrderedDescending;
+            }
+            return NSOrderedSame;
+        }];
+        self.cachedTopHosts = hosts;
+
+        NSArray<ConnectionTraffic *> *connections = [self.connectionStats.allValues sortedArrayUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
+            if (obj1.bytes > obj2.bytes) {
+                return NSOrderedAscending;
+            } else if (obj1.bytes < obj2.bytes) {
+                return NSOrderedDescending;
+            }
+            return NSOrderedSame;
+        }];
+        self.cachedTopConnections = connections;
+        self.statsCacheDirty = NO;
+    }
+
+    stats.topHosts = self.cachedTopHosts;
+    stats.topConnections = self.cachedTopConnections;
+    return stats;
+}
+
 - (TrafficStats *)getCurrentStats {
-    __block TrafficStats *stats = [[TrafficStats alloc] init];
+    __block TrafficStats *stats = nil;
 
     dispatch_sync(self.statsQueue, ^{
-        stats.totalBytes = self.totalBytes;
-        stats.incomingBytes = self.incomingBytes;
-        stats.outgoingBytes = self.outgoingBytes;
-        stats.totalPackets = self.totalPackets;
-
-        // Calculate bytes per second
-        NSDate *now = [NSDate date];
-        if (self.lastUpdateTime) {
-            NSTimeInterval elapsed = [now timeIntervalSinceDate:self.lastUpdateTime];
-            if (elapsed > 0) {
-                uint64_t bytesDiff = self.totalBytes - self.lastTotalBytes;
-                stats.bytesPerSecond = (uint64_t)(bytesDiff / elapsed);
-            }
-        }
-        self.lastUpdateTime = now;
-        self.lastTotalBytes = self.totalBytes;
-
-        // Use cached sorted results if available and cache is clean
-        if (self.statsCacheDirty || !self.cachedTopHosts || !self.cachedTopConnections) {
-            // Get top hosts sorted by bytes
-            NSArray<HostTraffic *> *hosts = [self.hostStats.allValues sortedArrayUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
-                if (obj1.bytes > obj2.bytes) {
-                    return NSOrderedAscending;
-                } else if (obj1.bytes < obj2.bytes) {
-                    return NSOrderedDescending;
-                }
-                return NSOrderedSame;
-            }];
-            self.cachedTopHosts = hosts;
-
-            NSArray<ConnectionTraffic *> *connections = [self.connectionStats.allValues sortedArrayUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
-                if (obj1.bytes > obj2.bytes) {
-                    return NSOrderedAscending;
-                } else if (obj1.bytes < obj2.bytes) {
-                    return NSOrderedDescending;
-                }
-                return NSOrderedSame;
-            }];
-            self.cachedTopConnections = connections;
-            self.statsCacheDirty = NO;
-        }
-
-        stats.topHosts = self.cachedTopHosts;
-        stats.topConnections = self.cachedTopConnections;
+        stats = [self currentStatsLocked];
     });
 
     return stats;
+}
+
+- (void)getCurrentStatsWithCompletion:(void (^)(TrafficStats *stats))completion {
+    if (!completion) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(self.statsQueue, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        TrafficStats *stats = [strongSelf currentStatsLocked];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(stats);
+        });
+    });
 }
 
 - (void)reset {

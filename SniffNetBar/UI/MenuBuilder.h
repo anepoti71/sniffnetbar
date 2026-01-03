@@ -29,6 +29,10 @@
         threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                  cacheStats:(NSDictionary *)cacheStats
                      target:(id)target;
+- (void)refreshVisualizationWithStats:(TrafficStats *)stats
+                  threatIntelEnabled:(BOOL)threatIntelEnabled
+                 threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
+                          cacheStats:(NSDictionary *)cacheStats;
 - (void)menuWillOpenWithStats:(TrafficStats *)stats;
 - (void)menuDidClose;
 - (void)selectMapProviderWithName:(NSString *)providerName stats:(TrafficStats *)stats;

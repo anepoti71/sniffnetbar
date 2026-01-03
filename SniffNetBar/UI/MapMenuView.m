@@ -29,6 +29,8 @@
 @property (nonatomic, assign) BOOL publicIPLookupInFlight;
 @property (nonatomic, assign) BOOL mapReady;
 @property (nonatomic, copy) NSArray<NSString *> *lastTargetIPs;
+@property (nonatomic, strong) dispatch_queue_t renderQueue;
+@property (nonatomic, assign) NSUInteger renderGeneration;
 @end
 
 @implementation MapMenuView
@@ -62,6 +64,7 @@
         _inFlightLookups = [NSMutableSet set];
         _failedLookups = [NSMutableSet set];
         _session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
+        _renderQueue = dispatch_queue_create("com.sniffnetbar.map.render", DISPATCH_QUEUE_SERIAL);
 
         NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProvider];
         NSString *defaultProvider = [ConfigurationManager sharedManager].defaultMapProvider;
@@ -244,108 +247,144 @@
     if (!self.mapReady) {
         return;
     }
-    
-    NSMutableArray<NSDictionary *> *points = [NSMutableArray array];
-    for (NSString *ip in self.lastTargetIPs) {
-        NSDictionary *value = [self.locationCache objectForKey:ip];
-        if (!value) {
-            continue;
-        }
-        CLLocationCoordinate2D coord;
-        coord.latitude = [value[@"lat"] doubleValue];
-        coord.longitude = [value[@"lon"] doubleValue];
-        if (!CLLocationCoordinate2DIsValid(coord)) {
-            continue;
-        }
-        NSString *name = value[@"name"];
-        NSString *isp = value[@"isp"];
-        NSString *locationPart = name.length > 0 ? [NSString stringWithFormat:@"%@ — %@", ip, name] : ip;
-        NSString *title = isp.length > 0 ? [NSString stringWithFormat:@"%@\nISP: %@", locationPart, isp] : locationPart;
-        [points addObject:@{@"lat": @(coord.latitude), @"lon": @(coord.longitude), @"title": title}];
-    }
-    
-    if (self.publicIPAddress.length > 0 && self.publicIPCoordinate) {
-        CLLocationCoordinate2D coord;
-        [self.publicIPCoordinate getValue:&coord];
-        if (CLLocationCoordinate2DIsValid(coord)) {
-            [points addObject:@{@"lat": @(coord.latitude),
-                                @"lon": @(coord.longitude),
-                                @"title": [NSString stringWithFormat:@"Public IP: %@", self.publicIPAddress]}];
-        }
-    }
-    
-    NSError *jsonError;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:points options:0 error:&jsonError];
-    if (!data) {
-        SNBLogUIDebug(" JSON encode error: %{public}@", jsonError.localizedDescription);
-        return;
-    }
-    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    // Get public IP coordinate for local IP fallback
-    CLLocationCoordinate2D publicCoord = kCLLocationCoordinate2DInvalid;
-    if (self.publicIPCoordinate) {
-        [self.publicIPCoordinate getValue:&publicCoord];
-    }
 
+    self.renderGeneration += 1;
+    NSUInteger generation = self.renderGeneration;
+    NSArray<NSString *> *targetIPs = [self.lastTargetIPs copy] ?: @[];
+    NSArray<ConnectionTraffic *> *connections = [self.lastConnections copy] ?: @[];
+    NSString *publicIP = [self.publicIPAddress copy];
+    NSValue *publicCoordValue = self.publicIPCoordinate;
     ConfigurationManager *config = [ConfigurationManager sharedManager];
-    NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
-    NSInteger maxLines = MIN(config.maxConnectionLinesToShow, self.lastConnections.count);
+
+    NSMutableDictionary<NSString *, NSDictionary *> *locationByIP = [NSMutableDictionary dictionary];
+    for (NSString *ip in targetIPs) {
+        NSDictionary *value = [self.locationCache objectForKey:ip];
+        if (value) {
+            locationByIP[ip] = value;
+        }
+    }
+
+    NSInteger maxLines = MIN(config.maxConnectionLinesToShow, connections.count);
     for (NSInteger i = 0; i < maxLines; i++) {
-        ConnectionTraffic *connection = self.lastConnections[i];
-
-        // Get source location (use public IP for local addresses)
-        NSDictionary *src = [self.locationCache objectForKey:connection.sourceAddress];
-        BOOL srcIsLocal = ![self shouldGeolocateIPAddress:connection.sourceAddress];
-        if (!src && srcIsLocal && CLLocationCoordinate2DIsValid(publicCoord)) {
-            src = @{@"lat": @(publicCoord.latitude), @"lon": @(publicCoord.longitude)};
+        ConnectionTraffic *connection = connections[i];
+        if (connection.sourceAddress.length > 0 && !locationByIP[connection.sourceAddress]) {
+            NSDictionary *value = [self.locationCache objectForKey:connection.sourceAddress];
+            if (value) {
+                locationByIP[connection.sourceAddress] = value;
+            }
         }
-
-        // Get destination location (use public IP for local addresses)
-        NSDictionary *dst = [self.locationCache objectForKey:connection.destinationAddress];
-        BOOL dstIsLocal = ![self shouldGeolocateIPAddress:connection.destinationAddress];
-        if (!dst && dstIsLocal && CLLocationCoordinate2DIsValid(publicCoord)) {
-            dst = @{@"lat": @(publicCoord.latitude), @"lon": @(publicCoord.longitude)};
+        if (connection.destinationAddress.length > 0 && !locationByIP[connection.destinationAddress]) {
+            NSDictionary *value = [self.locationCache objectForKey:connection.destinationAddress];
+            if (value) {
+                locationByIP[connection.destinationAddress] = value;
+            }
         }
-
-        // Skip if we still don't have both locations
-        if (!src || !dst) {
-            continue;
-        }
-
-        CLLocationCoordinate2D srcCoord = CLLocationCoordinate2DMake([src[@"lat"] doubleValue], [src[@"lon"] doubleValue]);
-        CLLocationCoordinate2D dstCoord = CLLocationCoordinate2DMake([dst[@"lat"] doubleValue], [dst[@"lon"] doubleValue]);
-        if (!CLLocationCoordinate2DIsValid(srcCoord) || !CLLocationCoordinate2DIsValid(dstCoord)) {
-            continue;
-        }
-
-        NSString *lineTitle = [NSString stringWithFormat:@"%@ → %@ (%@)",
-                               connection.sourceAddress,
-                               connection.destinationAddress,
-                               [SNBByteFormatter stringFromBytes:connection.bytes]];
-        [lines addObject:@{@"srcLat": @(srcCoord.latitude),
-                           @"srcLon": @(srcCoord.longitude),
-                           @"dstLat": @(dstCoord.latitude),
-                           @"dstLon": @(dstCoord.longitude),
-                           @"title": lineTitle}];
-    }
-    SNBLogUIDebug(": created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)self.lastConnections.count);
-    if (lines.count > 0) {
-        SNBLogUIDebug(": First line example: %{public}@", lines[0]);
     }
 
-    NSData *lineData = [NSJSONSerialization dataWithJSONObject:lines options:0 error:&jsonError];
-    if (!lineData) {
-        SNBLogUIDebug(" JSON encode error (lines): %{public}@", jsonError.localizedDescription);
-        return;
-    }
-    NSString *lineJson = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
-    SNBLogUIDebug(": Line JSON being sent: %{public}@", lineJson);
-    NSString *script = [NSString stringWithFormat:@"window.SniffNetBar && window.SniffNetBar.setMarkers(%@, %@);", json, lineJson];
-    [self.webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
-        if (error) {
-            SNBLogUIDebug(" JS error: %{public}@", error.localizedDescription);
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(self.renderQueue, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
         }
-    }];
+
+        NSMutableArray<NSDictionary *> *points = [NSMutableArray array];
+        for (NSString *ip in targetIPs) {
+            NSDictionary *value = locationByIP[ip];
+            if (!value) {
+                continue;
+            }
+            CLLocationCoordinate2D coord;
+            coord.latitude = [value[@"lat"] doubleValue];
+            coord.longitude = [value[@"lon"] doubleValue];
+            if (!CLLocationCoordinate2DIsValid(coord)) {
+                continue;
+            }
+            NSString *name = value[@"name"];
+            NSString *isp = value[@"isp"];
+            NSString *locationPart = name.length > 0 ? [NSString stringWithFormat:@"%@ — %@", ip, name] : ip;
+            NSString *title = isp.length > 0 ? [NSString stringWithFormat:@"%@\nISP: %@", locationPart, isp] : locationPart;
+            [points addObject:@{@"lat": @(coord.latitude), @"lon": @(coord.longitude), @"title": title}];
+        }
+
+        CLLocationCoordinate2D publicCoord = kCLLocationCoordinate2DInvalid;
+        if (publicCoordValue) {
+            [publicCoordValue getValue:&publicCoord];
+        }
+        if (publicIP.length > 0 && CLLocationCoordinate2DIsValid(publicCoord)) {
+            [points addObject:@{@"lat": @(publicCoord.latitude),
+                                @"lon": @(publicCoord.longitude),
+                                @"title": [NSString stringWithFormat:@"Public IP: %@", publicIP]}];
+        }
+
+        NSError *jsonError;
+        NSData *data = [NSJSONSerialization dataWithJSONObject:points options:0 error:&jsonError];
+        if (!data) {
+            SNBLogUIDebug(" JSON encode error: %{public}@", jsonError.localizedDescription);
+            return;
+        }
+        NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+
+        NSMutableArray<NSDictionary *> *lines = [NSMutableArray array];
+        for (NSInteger i = 0; i < maxLines; i++) {
+            ConnectionTraffic *connection = connections[i];
+
+            NSDictionary *src = locationByIP[connection.sourceAddress];
+            BOOL srcIsLocal = ![strongSelf shouldGeolocateIPAddress:connection.sourceAddress];
+            if (!src && srcIsLocal && CLLocationCoordinate2DIsValid(publicCoord)) {
+                src = @{@"lat": @(publicCoord.latitude), @"lon": @(publicCoord.longitude)};
+            }
+
+            NSDictionary *dst = locationByIP[connection.destinationAddress];
+            BOOL dstIsLocal = ![strongSelf shouldGeolocateIPAddress:connection.destinationAddress];
+            if (!dst && dstIsLocal && CLLocationCoordinate2DIsValid(publicCoord)) {
+                dst = @{@"lat": @(publicCoord.latitude), @"lon": @(publicCoord.longitude)};
+            }
+
+            if (!src || !dst) {
+                continue;
+            }
+
+            CLLocationCoordinate2D srcCoord = CLLocationCoordinate2DMake([src[@"lat"] doubleValue], [src[@"lon"] doubleValue]);
+            CLLocationCoordinate2D dstCoord = CLLocationCoordinate2DMake([dst[@"lat"] doubleValue], [dst[@"lon"] doubleValue]);
+            if (!CLLocationCoordinate2DIsValid(srcCoord) || !CLLocationCoordinate2DIsValid(dstCoord)) {
+                continue;
+            }
+
+            NSString *lineTitle = [NSString stringWithFormat:@"%@ → %@ (%@)",
+                                   connection.sourceAddress,
+                                   connection.destinationAddress,
+                                   [SNBByteFormatter stringFromBytes:connection.bytes]];
+            [lines addObject:@{@"srcLat": @(srcCoord.latitude),
+                               @"srcLon": @(srcCoord.longitude),
+                               @"dstLat": @(dstCoord.latitude),
+                               @"dstLon": @(dstCoord.longitude),
+                               @"title": lineTitle}];
+        }
+        SNBLogUIDebug(": created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)connections.count);
+        if (lines.count > 0) {
+            SNBLogUIDebug(": First line example: %{public}@", lines[0]);
+        }
+
+        NSData *lineData = [NSJSONSerialization dataWithJSONObject:lines options:0 error:&jsonError];
+        if (!lineData) {
+            SNBLogUIDebug(" JSON encode error (lines): %{public}@", jsonError.localizedDescription);
+            return;
+        }
+        NSString *lineJson = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
+        NSString *script = [NSString stringWithFormat:@"window.SniffNetBar && window.SniffNetBar.setMarkers(%@, %@);", json, lineJson];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (generation != strongSelf.renderGeneration || !strongSelf.mapReady) {
+                return;
+            }
+            [strongSelf.webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+                if (error) {
+                    SNBLogUIDebug(" JS error: %{public}@", error.localizedDescription);
+                }
+            }];
+        });
+    });
 }
 
 - (void)loadMapHTML {

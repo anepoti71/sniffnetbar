@@ -19,6 +19,7 @@
 @property (nonatomic, strong) ConfigurationManager *configuration;
 @property (nonatomic, strong) MapMenuView *mapMenuView;
 @property (nonatomic, strong) NSMenuItem *mapMenuItem;
+@property (nonatomic, weak) NSMenu *visualizationSubmenu;
 @property (nonatomic, copy, readwrite) NSString *mapProviderName;
 @property (nonatomic, assign, readwrite) BOOL menuIsOpen;
 @property (nonatomic, assign) uint64_t lastTotalBytes;
@@ -204,6 +205,11 @@
     [self.statusMenu addItem:titleItem];
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
 
+    NSMenuItem *settingsItem = [[NSMenuItem alloc] initWithTitle:@"Settings" action:nil keyEquivalent:@""];
+    NSMenu *settingsSubmenu = [[NSMenu alloc] init];
+    settingsItem.submenu = settingsSubmenu;
+    [self.statusMenu addItem:settingsItem];
+
     NSMenuItem *deviceMenu = [[NSMenuItem alloc] initWithTitle:@"Network Interface" action:nil keyEquivalent:@""];
     NSMenu *deviceSubmenu = [[NSMenu alloc] init];
     NSArray<NetworkDevice *> *deviceList = devices ?: @[];
@@ -221,41 +227,36 @@
     }
 
     deviceMenu.submenu = deviceSubmenu;
-    [self.statusMenu addItem:deviceMenu];
-    [self.statusMenu addItem:[NSMenuItem separatorItem]];
-
-    NSMenuItem *viewItem = [[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""];
-    viewItem.enabled = NO;
-    [self.statusMenu addItem:viewItem];
+    [settingsSubmenu addItem:deviceMenu];
+    [settingsSubmenu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *toggleHosts = [[NSMenuItem alloc] initWithTitle:@"Show Top Hosts"
                                                          action:@selector(toggleShowTopHosts:)
                                                   keyEquivalent:@""];
     toggleHosts.target = target;
     toggleHosts.state = self.showTopHosts ? NSControlStateValueOn : NSControlStateValueOff;
-    [self.statusMenu addItem:toggleHosts];
-
     NSMenuItem *toggleConnections = [[NSMenuItem alloc] initWithTitle:@"Show Top Connections"
                                                                action:@selector(toggleShowTopConnections:)
                                                         keyEquivalent:@""];
     toggleConnections.target = target;
     toggleConnections.state = self.showTopConnections ? NSControlStateValueOn : NSControlStateValueOff;
-    [self.statusMenu addItem:toggleConnections];
-    [self.statusMenu addItem:[NSMenuItem separatorItem]];
-
     NSMenuItem *toggleMap = [[NSMenuItem alloc] initWithTitle:@"Show Map Visualization"
                                                        action:@selector(toggleShowMap:)
                                                 keyEquivalent:@""];
     toggleMap.target = target;
     toggleMap.state = self.showMap ? NSControlStateValueOn : NSControlStateValueOff;
-    [self.statusMenu addItem:toggleMap];
+
+    [settingsSubmenu addItem:toggleHosts];
+    [settingsSubmenu addItem:toggleConnections];
+    [settingsSubmenu addItem:toggleMap];
+    [settingsSubmenu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *toggleThreatIntel = [[NSMenuItem alloc] initWithTitle:@"Enable Threat Intelligence"
                                                                action:@selector(toggleThreatIntel:)
                                                         keyEquivalent:@""];
     toggleThreatIntel.target = target;
     toggleThreatIntel.state = threatIntelEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-    [self.statusMenu addItem:toggleThreatIntel];
+    [settingsSubmenu addItem:toggleThreatIntel];
 
     NSMenuItem *providerItem = [[NSMenuItem alloc] initWithTitle:@"GeoLocation Provider" action:nil keyEquivalent:@""];
     NSMenu *providerSubmenu = [[NSMenu alloc] init];
@@ -273,123 +274,18 @@
         [providerSubmenu addItem:providerMenuItem];
     }
     providerItem.submenu = providerSubmenu;
-    [self.statusMenu addItem:providerItem];
+    [settingsSubmenu addItem:providerItem];
+
+    NSMenuItem *visualizationItem = [[NSMenuItem alloc] initWithTitle:@"Visualization" action:nil keyEquivalent:@""];
+    NSMenu *visualizationSubmenu = [[NSMenu alloc] init];
+    visualizationItem.submenu = visualizationSubmenu;
+    self.visualizationSubmenu = visualizationSubmenu;
+    [self.statusMenu addItem:visualizationItem];
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
-
-    if (self.showMap && self.menuIsOpen) {
-        NSMenuItem *mapItem = [self mapMenuItemIfNeeded];
-        if (mapItem) {
-            [self.statusMenu addItem:mapItem];
-            [self.statusMenu addItem:[NSMenuItem separatorItem]];
-        }
-    } else {
-        [self tearDownMapMenuItem];
-    }
-
-    NSString *totalBytesStr = [SNBByteFormatter stringFromBytes:stats.totalBytes];
-    NSMenuItem *bytesItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Total: %@", totalBytesStr]
-                                                       action:nil
-                                                keyEquivalent:@""];
-    bytesItem.enabled = NO;
-    [self.statusMenu addItem:bytesItem];
-
-    NSString *incomingStr = [SNBByteFormatter stringFromBytes:stats.incomingBytes];
-    NSString *outgoingStr = [SNBByteFormatter stringFromBytes:stats.outgoingBytes];
-    NSMenuItem *incomingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↓ In: %@", incomingStr]
-                                                          action:nil
-                                                   keyEquivalent:@""];
-    incomingItem.enabled = NO;
-    [self.statusMenu addItem:incomingItem];
-
-    NSMenuItem *outgoingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↑ Out: %@", outgoingStr]
-                                                          action:nil
-                                                   keyEquivalent:@""];
-    outgoingItem.enabled = NO;
-    [self.statusMenu addItem:outgoingItem];
-    [self.statusMenu addItem:[NSMenuItem separatorItem]];
-
-    NSMenuItem *packetsItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Packets: %llu", stats.totalPackets]
-                                                         action:nil
-                                                  keyEquivalent:@""];
-    packetsItem.enabled = NO;
-    [self.statusMenu addItem:packetsItem];
-
-    if (self.showTopHosts && stats.topHosts.count > 0) {
-        [self.statusMenu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *hostsTitle = [[NSMenuItem alloc] initWithTitle:@"Top Hosts" action:nil keyEquivalent:@""];
-        hostsTitle.enabled = NO;
-        [self.statusMenu addItem:hostsTitle];
-
-        NSInteger count = MIN(config.maxTopHostsToShow, stats.topHosts.count);
-        for (NSInteger i = 0; i < count; i++) {
-            HostTraffic *host = stats.topHosts[i];
-            NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
-            NSString *hostDisplay = hostName.length > 0 ? [NSString stringWithFormat:@"%@ (%@)", hostName, host.address] : host.address;
-            NSString *hostItemStr = [NSString stringWithFormat:@"  %@ - %@",
-                                     hostDisplay, [SNBByteFormatter stringFromBytes:host.bytes]];
-            NSMenuItem *hostItem = [[NSMenuItem alloc] initWithTitle:hostItemStr action:nil keyEquivalent:@""];
-            hostItem.enabled = NO;
-            [self.statusMenu addItem:hostItem];
-        }
-    }
-
-    if (self.showTopConnections && stats.topConnections.count > 0) {
-        [self.statusMenu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *connectionsTitle = [[NSMenuItem alloc] initWithTitle:@"Top Connections" action:nil keyEquivalent:@""];
-        connectionsTitle.enabled = NO;
-        [self.statusMenu addItem:connectionsTitle];
-
-        NSInteger count = MIN(config.maxTopConnectionsToShow, stats.topConnections.count);
-        for (NSInteger i = 0; i < count; i++) {
-            ConnectionTraffic *connection = stats.topConnections[i];
-            NSString *connectionItemStr = [NSString stringWithFormat:@"  %@ - %@  %@",
-                                           connection.sourceAddress,
-                                           connection.destinationAddress,
-                                           [SNBByteFormatter stringFromBytes:connection.bytes]];
-            NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:connectionItemStr action:nil keyEquivalent:@""];
-            connectionItem.enabled = NO;
-            [self.statusMenu addItem:connectionItem];
-        }
-    }
-
-    if (threatIntelEnabled && threatIntelResults.count > 0) {
-        [self.statusMenu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"Threat Intelligence" action:nil keyEquivalent:@""];
-        threatTitle.enabled = NO;
-        [self.statusMenu addItem:threatTitle];
-
-        for (NSString *ip in [threatIntelResults allKeys]) {
-            TIEnrichmentResponse *response = threatIntelResults[ip];
-            if (response.scoringResult) {
-                TIScoringResult *scoring = response.scoringResult;
-                NSString *verdictStr = [scoring verdictString];
-                NSColor *color = [scoring verdictColor];
-
-                NSString *displayStr = [NSString stringWithFormat:@"  %@: %@ (Score: %ld)",
-                                        ip, verdictStr, (long)scoring.finalScore];
-
-                NSMenuItem *threatItem = [[NSMenuItem alloc] initWithTitle:displayStr
-                                                                   action:nil
-                                                            keyEquivalent:@""];
-                threatItem.enabled = NO;
-
-                NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:displayStr];
-                [attrString addAttribute:NSForegroundColorAttributeName
-                                   value:color
-                                   range:NSMakeRange(0, displayStr.length)];
-                threatItem.attributedTitle = attrString;
-                [self.statusMenu addItem:threatItem];
-            }
-        }
-
-        if (cacheStats) {
-            NSString *statsStr = [NSString stringWithFormat:@"  Cache: %@ entries (%.1f%% hit rate)",
-                                  cacheStats[@"size"], [cacheStats[@"hitRate"] doubleValue] * 100];
-            NSMenuItem *statsItem = [[NSMenuItem alloc] initWithTitle:statsStr action:nil keyEquivalent:@""];
-            statsItem.enabled = NO;
-            [self.statusMenu addItem:statsItem];
-        }
-    }
+    [self rebuildVisualizationMenuWithStats:stats
+                        threatIntelEnabled:threatIntelEnabled
+                       threatIntelResults:threatIntelResults
+                                cacheStats:cacheStats];
 
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
@@ -454,10 +350,29 @@
     }
 }
 
+- (void)refreshVisualizationWithStats:(TrafficStats *)stats
+                  threatIntelEnabled:(BOOL)threatIntelEnabled
+                 threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
+                          cacheStats:(NSDictionary *)cacheStats {
+    if (!self.menuIsOpen || !self.visualizationSubmenu) {
+        return;
+    }
+
+    [self rebuildVisualizationMenuWithStats:stats
+                        threatIntelEnabled:threatIntelEnabled
+                       threatIntelResults:threatIntelResults
+                                cacheStats:cacheStats];
+
+    if (self.showMap && self.mapMenuView) {
+        [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];
+    }
+}
+
 - (void)menuDidClose {
     self.menuIsOpen = NO;
     SNBLogUIDebug("Status menu closed");
     [self tearDownMapMenuItem];
+    self.visualizationSubmenu = nil;
 }
 
 - (void)selectMapProviderWithName:(NSString *)providerName stats:(TrafficStats *)stats {
@@ -473,6 +388,137 @@
         self.mapMenuView.providerName = self.mapProviderName;
         if (self.showMap && stats) {
             [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];
+        }
+    }
+}
+
+- (void)rebuildVisualizationMenuWithStats:(TrafficStats *)stats
+                      threatIntelEnabled:(BOOL)threatIntelEnabled
+                     threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
+                              cacheStats:(NSDictionary *)cacheStats {
+    NSMenu *visualizationSubmenu = self.visualizationSubmenu;
+    if (!visualizationSubmenu) {
+        return;
+    }
+
+    [visualizationSubmenu removeAllItems];
+    ConfigurationManager *config = self.configuration;
+
+    if (self.showMap && self.menuIsOpen) {
+        if (self.mapMenuItem.menu && self.mapMenuItem.menu != visualizationSubmenu) {
+            [self.mapMenuItem.menu removeItem:self.mapMenuItem];
+        }
+        NSMenuItem *mapItem = [self mapMenuItemIfNeeded];
+        if (mapItem) {
+            [visualizationSubmenu addItem:mapItem];
+            [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+        }
+    } else {
+        [self tearDownMapMenuItem];
+    }
+
+    NSString *totalBytesStr = [SNBByteFormatter stringFromBytes:stats.totalBytes];
+    NSMenuItem *bytesItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Total: %@", totalBytesStr]
+                                                       action:nil
+                                                keyEquivalent:@""];
+    bytesItem.enabled = NO;
+    [visualizationSubmenu addItem:bytesItem];
+
+    NSString *incomingStr = [SNBByteFormatter stringFromBytes:stats.incomingBytes];
+    NSString *outgoingStr = [SNBByteFormatter stringFromBytes:stats.outgoingBytes];
+    NSMenuItem *incomingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↓ In: %@", incomingStr]
+                                                          action:nil
+                                                   keyEquivalent:@""];
+    incomingItem.enabled = NO;
+    [visualizationSubmenu addItem:incomingItem];
+
+    NSMenuItem *outgoingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↑ Out: %@", outgoingStr]
+                                                          action:nil
+                                                   keyEquivalent:@""];
+    outgoingItem.enabled = NO;
+    [visualizationSubmenu addItem:outgoingItem];
+    [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *packetsItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Packets: %llu", stats.totalPackets]
+                                                         action:nil
+                                                  keyEquivalent:@""];
+    packetsItem.enabled = NO;
+    [visualizationSubmenu addItem:packetsItem];
+
+    if (self.showTopHosts && stats.topHosts.count > 0) {
+        [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *hostsTitle = [[NSMenuItem alloc] initWithTitle:@"Top Hosts" action:nil keyEquivalent:@""];
+        hostsTitle.enabled = NO;
+        [visualizationSubmenu addItem:hostsTitle];
+
+        NSInteger count = MIN(config.maxTopHostsToShow, stats.topHosts.count);
+        for (NSInteger i = 0; i < count; i++) {
+            HostTraffic *host = stats.topHosts[i];
+            NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
+            NSString *hostDisplay = hostName.length > 0 ? [NSString stringWithFormat:@"%@ (%@)", hostName, host.address] : host.address;
+            NSString *hostItemStr = [NSString stringWithFormat:@"  %@ - %@",
+                                     hostDisplay, [SNBByteFormatter stringFromBytes:host.bytes]];
+            NSMenuItem *hostItem = [[NSMenuItem alloc] initWithTitle:hostItemStr action:nil keyEquivalent:@""];
+            hostItem.enabled = NO;
+            [visualizationSubmenu addItem:hostItem];
+        }
+    }
+
+    if (self.showTopConnections && stats.topConnections.count > 0) {
+        [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *connectionsTitle = [[NSMenuItem alloc] initWithTitle:@"Top Connections" action:nil keyEquivalent:@""];
+        connectionsTitle.enabled = NO;
+        [visualizationSubmenu addItem:connectionsTitle];
+
+        NSInteger count = MIN(config.maxTopConnectionsToShow, stats.topConnections.count);
+        for (NSInteger i = 0; i < count; i++) {
+            ConnectionTraffic *connection = stats.topConnections[i];
+            NSString *connectionItemStr = [NSString stringWithFormat:@"  %@ - %@  %@",
+                                           connection.sourceAddress,
+                                           connection.destinationAddress,
+                                           [SNBByteFormatter stringFromBytes:connection.bytes]];
+            NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:connectionItemStr action:nil keyEquivalent:@""];
+            connectionItem.enabled = NO;
+            [visualizationSubmenu addItem:connectionItem];
+        }
+    }
+
+    if (threatIntelEnabled && threatIntelResults.count > 0) {
+        [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"Threat Intelligence" action:nil keyEquivalent:@""];
+        threatTitle.enabled = NO;
+        [visualizationSubmenu addItem:threatTitle];
+
+        for (NSString *ip in [threatIntelResults allKeys]) {
+            TIEnrichmentResponse *response = threatIntelResults[ip];
+            if (response.scoringResult) {
+                TIScoringResult *scoring = response.scoringResult;
+                NSString *verdictStr = [scoring verdictString];
+                NSColor *color = [scoring verdictColor];
+
+                NSString *displayStr = [NSString stringWithFormat:@"  %@: %@ (Score: %ld)",
+                                        ip, verdictStr, (long)scoring.finalScore];
+
+                NSMenuItem *threatItem = [[NSMenuItem alloc] initWithTitle:displayStr
+                                                                   action:nil
+                                                            keyEquivalent:@""];
+                threatItem.enabled = NO;
+
+                NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:displayStr];
+                [attrString addAttribute:NSForegroundColorAttributeName
+                                   value:color
+                                   range:NSMakeRange(0, displayStr.length)];
+                threatItem.attributedTitle = attrString;
+                [visualizationSubmenu addItem:threatItem];
+            }
+        }
+
+        if (cacheStats) {
+            NSString *statsStr = [NSString stringWithFormat:@"  Cache: %@ entries (%.1f%% hit rate)",
+                                  cacheStats[@"size"], [cacheStats[@"hitRate"] doubleValue] * 100];
+            NSMenuItem *statsItem = [[NSMenuItem alloc] initWithTitle:statsStr action:nil keyEquivalent:@""];
+            statsItem.enabled = NO;
+            [visualizationSubmenu addItem:statsItem];
         }
     }
 }

@@ -31,6 +31,7 @@
 @property (nonatomic, assign) BOOL anomalyRetrainInProgress;
 @property (nonatomic, weak) NSStatusItem *statusItem;
 @property (nonatomic, weak) NSMenu *statusMenu;
+@property (nonatomic, assign) BOOL menuRefreshPending;
 @end
 
 @implementation AppCoordinator
@@ -139,23 +140,41 @@
 }
 
 - (void)updateMenuIfNeeded {
-    TrafficStats *stats = [self.statistics getCurrentStats];
-    [self.menuBuilder updateStatusWithStats:stats selectedDevice:self.deviceManager.selectedDevice];
-    if (self.menuBuilder.menuIsOpen) {
-        [self updateMenu];
-    }
+    __weak typeof(self) weakSelf = self;
+    [self.statistics getCurrentStatsWithCompletion:^(TrafficStats *stats) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf.menuBuilder updateStatusWithStats:stats selectedDevice:strongSelf.deviceManager.selectedDevice];
+        if (strongSelf.menuBuilder.menuIsOpen) {
+            [strongSelf.menuBuilder refreshVisualizationWithStats:stats
+                                             threatIntelEnabled:strongSelf.threatIntelCoordinator.isEnabled
+                                            threatIntelResults:[strongSelf.threatIntelCoordinator resultsSnapshot]
+                                                     cacheStats:[strongSelf.threatIntelCoordinator cacheStats]];
+        } else {
+            [strongSelf updateMenuWithStats:stats];
+        }
+    }];
 }
 
 - (void)updateMenu {
-    TrafficStats *stats = [self.statistics getCurrentStats];
+    __weak typeof(self) weakSelf = self;
+    [self.statistics getCurrentStatsWithCompletion:^(TrafficStats *stats) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf updateMenuWithStats:stats];
+    }];
+}
 
+- (void)updateMenuWithStats:(TrafficStats *)stats {
     if (self.menuBuilder.showTopConnections && self.threatIntelCoordinator.isEnabled) {
         for (ConnectionTraffic *connection in stats.topConnections) {
             [self.threatIntelCoordinator enrichIPIfNeeded:connection.destinationAddress
                                                completion:^{
-                if (self.menuBuilder.menuIsOpen) {
-                    [self updateMenu];
-                }
+                [self scheduleMenuRefresh];
             }];
         }
     }
@@ -195,8 +214,15 @@
 
 - (void)selectMapProvider:(NSMenuItem *)sender {
     NSString *provider = sender.representedObject;
-    [self.menuBuilder selectMapProviderWithName:provider stats:[self.statistics getCurrentStats]];
-    [self updateMenu];
+    __weak typeof(self) weakSelf = self;
+    [self.statistics getCurrentStatsWithCompletion:^(TrafficStats *stats) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf.menuBuilder selectMapProviderWithName:provider stats:stats];
+        [strongSelf updateMenuWithStats:stats];
+    }];
 }
 
 - (void)toggleThreatIntel:(NSMenuItem *)sender {
@@ -205,12 +231,43 @@
 }
 
 - (void)menuWillOpenWithStats {
-    [self.menuBuilder menuWillOpenWithStats:[self.statistics getCurrentStats]];
-    [self updateMenu];
+    __weak typeof(self) weakSelf = self;
+    [self.statistics getCurrentStatsWithCompletion:^(TrafficStats *stats) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf.menuBuilder menuWillOpenWithStats:stats];
+        [strongSelf updateMenuWithStats:stats];
+    }];
 }
 
 - (void)menuDidClose {
     [self.menuBuilder menuDidClose];
+}
+
+#pragma mark - Menu refresh
+
+- (void)scheduleMenuRefresh {
+    if (self.menuRefreshPending) {
+        return;
+    }
+    if (self.menuBuilder.menuIsOpen) {
+        return;
+    }
+
+    self.menuRefreshPending = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.menuRefreshPending = NO;
+        if (strongSelf.menuBuilder.menuIsOpen) {
+            [strongSelf updateMenu];
+        }
+    });
 }
 
 #pragma mark - Anomaly retraining

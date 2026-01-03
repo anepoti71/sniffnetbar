@@ -4,7 +4,7 @@
 <dict>
 	<!-- Logging Configuration -->
 	<key>DebugLogging</key>
-	<true/>
+	<false/>
 
 	<!-- UI Update Configuration -->
 	<key>MenuUpdateInterval</key>

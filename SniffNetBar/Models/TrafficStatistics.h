@@ -13,6 +13,7 @@
 
 - (void)processPacket:(PacketInfo *)packetInfo;
 - (TrafficStats *)getCurrentStats;
+- (void)getCurrentStatsWithCompletion:(void (^)(TrafficStats *stats))completion;
 - (void)reset;
 
 @end

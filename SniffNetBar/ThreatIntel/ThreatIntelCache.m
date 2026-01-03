@@ -23,6 +23,8 @@
 @property (nonatomic, assign) NSInteger hits;
 @property (nonatomic, assign) NSInteger misses;
 @property (nonatomic, strong) dispatch_queue_t cacheQueue;
+@property (atomic, assign) NSInteger cachedSize;
+@property (atomic, assign) double cachedHitRate;
 @end
 
 @implementation ThreatIntelCache
@@ -35,6 +37,8 @@
         _hits = 0;
         _misses = 0;
         _cacheQueue = dispatch_queue_create("com.sniffnetbar.threatintel.cache", DISPATCH_QUEUE_SERIAL);
+        _cachedSize = 0;
+        _cachedHitRate = 0.0;
     }
     return self;
 }
@@ -71,6 +75,7 @@
             self.misses++;
             SNBLogThreatIntelDebug("Miss for %{" SNB_IP_PRIVACY "}@", key);
         }
+        [self updateStatsLocked];
     });
 
     return result;
@@ -93,6 +98,7 @@
         if (self.cache.count > self.maxSize) {
             [self evictLRU];
         }
+        [self updateStatsLocked];
     });
 }
 
@@ -131,8 +137,10 @@
             }
             SNBLogThreatIntelDebug("Invalidated all entries for provider %{public}@", provider);
         } else {
-            [self clear];
+            [self.cache removeAllObjects];
+            SNBLogThreatIntelDebug("Cleared all entries");
         }
+        [self updateStatsLocked];
     });
 }
 
@@ -140,26 +148,16 @@
     dispatch_async(self.cacheQueue, ^{
         [self.cache removeAllObjects];
         SNBLogThreatIntelDebug("Cleared all entries");
+        [self updateStatsLocked];
     });
 }
 
 - (NSInteger)size {
-    __block NSInteger count = 0;
-    dispatch_sync(self.cacheQueue, ^{
-        count = self.cache.count;
-    });
-    return count;
+    return self.cachedSize;
 }
 
 - (double)hitRate {
-    __block double rate = 0.0;
-    dispatch_sync(self.cacheQueue, ^{
-        NSInteger total = self.hits + self.misses;
-        if (total > 0) {
-            rate = (double)self.hits / (double)total;
-        }
-    });
-    return rate;
+    return self.cachedHitRate;
 }
 
 - (void)evictLRU {
@@ -179,6 +177,20 @@
         [self.cache removeObjectForKey:lruKey];
         SNBLogThreatIntelDebug("Evicted LRU entry %{" SNB_IP_PRIVACY "}@", lruKey);
     }
+    [self updateStatsLocked];
+}
+
+- (NSDictionary *)statsSnapshot {
+    return @{
+        @"size": @(self.cachedSize),
+        @"hitRate": @(self.cachedHitRate)
+    };
+}
+
+- (void)updateStatsLocked {
+    NSInteger total = self.hits + self.misses;
+    self.cachedSize = self.cache.count;
+    self.cachedHitRate = total > 0 ? (double)self.hits / (double)total : 0.0;
 }
 
 @end

@@ -404,10 +404,7 @@
 // MARK: - Cache Management
 
 - (NSDictionary *)cacheStats {
-    return @{
-        @"size": @([self.cache size]),
-        @"hitRate": @([self.cache hitRate])
-    };
+    return [self.cache statsSnapshot];
 }
 
 - (void)clearCache {

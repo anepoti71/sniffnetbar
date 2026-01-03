@@ -36,6 +36,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// Stats
 - (NSInteger)size;
 - (double)hitRate;
+- (NSDictionary *)statsSnapshot;
 
 @end
 
