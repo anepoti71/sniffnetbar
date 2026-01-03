@@ -44,6 +44,10 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 @property (nonatomic, strong) NSArray<HostTraffic *> *cachedTopHosts;
 @property (nonatomic, strong) NSArray<ConnectionTraffic *> *cachedTopConnections;
 @property (nonatomic, assign) BOOL statsCacheDirty;
+@property (nonatomic, assign) uint64_t lastSampleTotalBytes;
+@property (nonatomic, strong) NSDate *lastSampleTime;
+@property (nonatomic, assign) uint64_t cachedBytesPerSecond;
+@property (nonatomic, strong) NSTimer *samplingTimer;
 @end
 
 @implementation TrafficStatistics
@@ -68,12 +72,18 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
                                                            block:^(NSTimer *timer) {
             [weakSelf performCacheCleanup];
         }];
+        _samplingTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                         repeats:YES
+                                                           block:^(NSTimer *timer) {
+            [weakSelf sampleBytesPerSecond];
+        }];
     }
     return self;
 }
 
 - (void)dealloc {
     [_cleanupTimer invalidate];
+    [_samplingTimer invalidate];
 }
 
 - (void)loadLocalAddresses {
@@ -327,18 +337,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
     stats.incomingBytes = self.incomingBytes;
     stats.outgoingBytes = self.outgoingBytes;
     stats.totalPackets = self.totalPackets;
-
-    // Calculate bytes per second
-    NSDate *now = [NSDate date];
-    if (self.lastUpdateTime) {
-        NSTimeInterval elapsed = [now timeIntervalSinceDate:self.lastUpdateTime];
-        if (elapsed > 0) {
-            uint64_t bytesDiff = self.totalBytes - self.lastTotalBytes;
-            stats.bytesPerSecond = (uint64_t)(bytesDiff / elapsed);
-        }
-    }
-    self.lastUpdateTime = now;
-    self.lastTotalBytes = self.totalBytes;
+    stats.bytesPerSecond = self.cachedBytesPerSecond;
 
     // Use cached sorted results if available and cache is clean
     if (self.statsCacheDirty || !self.cachedTopHosts || !self.cachedTopConnections) {
@@ -411,6 +410,24 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         self.cachedTopHosts = nil;
         self.cachedTopConnections = nil;
         self.statsCacheDirty = YES;
+        self.lastSampleTime = nil;
+        self.lastSampleTotalBytes = 0;
+        self.cachedBytesPerSecond = 0;
+    });
+}
+
+- (void)sampleBytesPerSecond {
+    dispatch_async(self.statsQueue, ^{
+        NSDate *now = [NSDate date];
+        if (self.lastSampleTime) {
+            NSTimeInterval elapsed = [now timeIntervalSinceDate:self.lastSampleTime];
+            if (elapsed > 0) {
+                uint64_t bytesDiff = self.totalBytes - self.lastSampleTotalBytes;
+                self.cachedBytesPerSecond = (uint64_t)(bytesDiff / elapsed);
+            }
+        }
+        self.lastSampleTime = now;
+        self.lastSampleTotalBytes = self.totalBytes;
     });
 }
 

@@ -362,6 +362,7 @@
                         threatIntelEnabled:threatIntelEnabled
                        threatIntelResults:threatIntelResults
                                 cacheStats:cacheStats];
+    [self truncateMenuItemsInMenu:self.visualizationSubmenu maxWidth:self.configuration.menuFixedWidth];
 
     if (self.showMap && self.mapMenuView) {
         [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];

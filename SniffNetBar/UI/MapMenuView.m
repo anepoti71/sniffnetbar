@@ -31,6 +31,7 @@
 @property (nonatomic, copy) NSArray<NSString *> *lastTargetIPs;
 @property (nonatomic, strong) dispatch_queue_t renderQueue;
 @property (nonatomic, assign) NSUInteger renderGeneration;
+@property (nonatomic, strong) NSDate *lastCacheCleanupTime;
 @end
 
 @implementation MapMenuView
@@ -123,10 +124,14 @@
         return;
     }
 
-    NSUInteger expiredCount = [self.locationCache cleanupAndReturnExpiredCount];
-    if (expiredCount > 0) {
-        SNBLogUIDebug(": cleaned up %lu expired location cache entries",
-               (unsigned long)expiredCount);
+    NSDate *now = [NSDate date];
+    if (!self.lastCacheCleanupTime || [now timeIntervalSinceDate:self.lastCacheCleanupTime] > 5.0) {
+        self.lastCacheCleanupTime = now;
+        NSUInteger expiredCount = [self.locationCache cleanupAndReturnExpiredCount];
+        if (expiredCount > 0) {
+            SNBLogUIDebug(": cleaned up %lu expired location cache entries",
+                   (unsigned long)expiredCount);
+        }
     }
     SNBLogUIDebug(" update: %lu connections", (unsigned long)connections.count);
     [self updatePublicIPLocationIfNeeded];
