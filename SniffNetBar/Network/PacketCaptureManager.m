@@ -19,8 +19,7 @@
 // Packet capture configuration constants
 static const int kPcapSnaplen = 65536;        // Maximum bytes to capture per packet
 static const int kPcapPromiscuousMode = 0;   // 0 = non-promiscuous, 1 = promiscuous
-static const int kPcapTimeoutMs = 150;        // Read timeout in milliseconds
-static const useconds_t kCaptureIdleSleepUs = 10000; // 10ms backoff on timeout
+static const int kPcapTimeoutMs = 500;        // Read timeout in milliseconds (increased for efficiency)
 static void *kCaptureQueueKey = &kCaptureQueueKey;
 
 @interface PacketCaptureManager ()
@@ -28,8 +27,7 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
 @property (nonatomic, assign) BOOL isCapturing;
 @property (nonatomic, strong) dispatch_queue_t captureQueue;
 @property (nonatomic, strong, readwrite) NSString *currentDeviceName;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *ipStringCache;
-@property (nonatomic, strong) dispatch_queue_t cacheQueue;
+@property (nonatomic, strong) NSCache<NSString *, NSString *> *ipStringCache;
 @end
 
 @implementation PacketCaptureManager
@@ -39,8 +37,9 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
     if (self) {
         _captureQueue = dispatch_queue_create("com.sniffnetbar.capture", DISPATCH_QUEUE_SERIAL);
         dispatch_queue_set_specific(_captureQueue, kCaptureQueueKey, kCaptureQueueKey, NULL);
-        _cacheQueue = dispatch_queue_create("com.sniffnetbar.ipcache", DISPATCH_QUEUE_SERIAL);
-        _ipStringCache = [NSMutableDictionary dictionaryWithCapacity:256];
+        _ipStringCache = [[NSCache alloc] init];
+        _ipStringCache.countLimit = 512; // Automatic LRU eviction when limit exceeded
+        _ipStringCache.name = @"com.sniffnetbar.ipcache";
         _pcapHandle = NULL;
         _isCapturing = NO;
     }
@@ -126,9 +125,7 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
     }
 
     // Clear IP string cache when stopping capture
-    dispatch_sync(self.cacheQueue, ^{
-        [self.ipStringCache removeAllObjects];
-    });
+    [self.ipStringCache removeAllObjects];
 }
 
 // String interning for IP addresses to reduce memory allocations
@@ -139,22 +136,14 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
 
     NSString *key = [NSString stringWithUTF8String:ipCString];
 
-    __block NSString *internedString = nil;
-    dispatch_sync(self.cacheQueue, ^{
-        internedString = self.ipStringCache[key];
-        if (!internedString) {
-            // Cache miss - store the string
-            internedString = key;
-            self.ipStringCache[key] = internedString;
-
-            // Limit cache size to prevent unbounded growth
-            if (self.ipStringCache.count > 512) {
-                // Clear oldest entries (simple strategy: clear half the cache)
-                NSArray *keys = [self.ipStringCache.allKeys subarrayWithRange:NSMakeRange(0, 256)];
-                [self.ipStringCache removeObjectsForKeys:keys];
-            }
-        }
-    });
+    // NSCache is thread-safe, no need for explicit synchronization
+    NSString *internedString = [self.ipStringCache objectForKey:key];
+    if (!internedString) {
+        // Cache miss - store the string
+        // NSCache automatically handles LRU eviction when countLimit is exceeded
+        internedString = key;
+        [self.ipStringCache setObject:internedString forKey:key];
+    }
 
     return internedString;
 }
@@ -178,8 +167,7 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
                 self.onPacketReceived(packetInfo);
             }
         } else if (result == 0) {
-            // Timeout
-            usleep(kCaptureIdleSleepUs);
+            // Timeout - continue without additional sleep since pcap timeout provides backoff
             continue;
         } else if (result == -1) {
             // Error

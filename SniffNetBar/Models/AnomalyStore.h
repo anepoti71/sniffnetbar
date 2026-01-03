@@ -9,6 +9,19 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@interface SNBAnomalyWindowRecord : NSObject
+
+@property (nonatomic, copy) NSString *dstIP;
+@property (nonatomic, assign) NSTimeInterval windowStart;
+@property (nonatomic, assign) NSInteger dstPort;
+@property (nonatomic, assign) NSInteger proto;
+@property (nonatomic, assign) BOOL isNew;
+@property (nonatomic, assign) BOOL isRare;
+@property (nonatomic, assign) NSInteger seenCount;
+@property (nonatomic, assign) double score;
+
+@end
+
 @interface SNBAnomalyStore : NSObject
 
 + (NSString *)defaultDatabasePath;
@@ -35,6 +48,16 @@ NS_ASSUME_NONNULL_BEGIN
                  isNewDst:(BOOL)isNewDst
                 isRareDst:(BOOL)isRareDst
                    score:(double)score;
+
+- (NSArray<SNBAnomalyWindowRecord *> *)windowsNeedingExplanationWithMinimumScore:(double)minimumScore
+                                                                          limit:(NSInteger)limit;
+
+- (void)storeExplanationForIP:(NSString *)ipAddress
+                  windowStart:(NSTimeInterval)windowStart
+                     riskBand:(NSString *)riskBand
+                      summary:(NSString *)summary
+                 evidenceTags:(NSArray<NSString *> *)evidenceTags
+                 promptVersion:(NSString *)promptVersion;
 
 @end
 

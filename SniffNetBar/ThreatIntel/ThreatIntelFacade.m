@@ -96,12 +96,13 @@
             [newCallbacks addObject:[completion copy]];
         }
         self.inFlightRequests[key] = newCallbacks;
-    }
 
-    // Execute enrichment
-    dispatch_async(self.enrichmentQueue, ^{
-        [self performEnrichmentForIndicator:indicator];
-    });
+        // Execute enrichment inside synchronized block to prevent race condition
+        // where request could complete and remove key before other threads check
+        dispatch_async(self.enrichmentQueue, ^{
+            [self performEnrichmentForIndicator:indicator];
+        });
+    }
 }
 
 - (void)performEnrichmentForIndicator:(TIIndicator *)indicator {

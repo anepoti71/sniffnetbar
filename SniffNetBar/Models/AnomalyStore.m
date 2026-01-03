@@ -12,6 +12,9 @@
 @property (nonatomic, assign) sqlite3 *db;
 @end
 
+@implementation SNBAnomalyWindowRecord
+@end
+
 @implementation SNBAnomalyStore
 
 + (NSString *)applicationSupportDirectory {
@@ -113,9 +116,23 @@
         "CREATE INDEX IF NOT EXISTS idx_anomaly_windows_time "
         "ON anomaly_windows(window_start);";
 
+    const char *createExplanations =
+        "CREATE TABLE IF NOT EXISTS anomaly_explanations ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "window_start INTEGER NOT NULL, "
+        "dst_ip TEXT NOT NULL, "
+        "risk_band TEXT NOT NULL, "
+        "summary TEXT NOT NULL, "
+        "evidence_tags TEXT NOT NULL, "
+        "prompt_version TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL, "
+        "UNIQUE(window_start, dst_ip)"
+        ");";
+
     sqlite3_exec(self.db, createWindows, NULL, NULL, NULL);
     sqlite3_exec(self.db, createIpStats, NULL, NULL, NULL);
     sqlite3_exec(self.db, createIndex, NULL, NULL, NULL);
+    sqlite3_exec(self.db, createExplanations, NULL, NULL, NULL);
 }
 
 - (NSInteger)seenCountForIP:(NSString *)ipAddress {
@@ -201,6 +218,86 @@
     }
     sqlite3_finalize(stmt);
 
+    sqlite3_exec(self.db, "COMMIT;", NULL, NULL, NULL);
+}
+
+- (NSArray<SNBAnomalyWindowRecord *> *)windowsNeedingExplanationWithMinimumScore:(double)minimumScore
+                                                                          limit:(NSInteger)limit {
+    if (!self.db) {
+        return @[];
+    }
+    sqlite3_stmt *stmt = NULL;
+    NSMutableArray<SNBAnomalyWindowRecord *> *results = [NSMutableArray array];
+    const char *sql =
+        "SELECT w.window_start, w.dst_ip, w.dst_port, w.proto, "
+        "w.is_new_dst, w.is_rare_dst, w.score, IFNULL(s.seen_count, 0) "
+        "FROM anomaly_windows w "
+        "LEFT JOIN anomaly_explanations e "
+        "ON e.window_start = w.window_start AND e.dst_ip = w.dst_ip "
+        "LEFT JOIN anomaly_ip_stats s "
+        "ON s.dst_ip = w.dst_ip "
+        "WHERE e.id IS NULL AND w.score >= ? "
+        "ORDER BY w.window_start DESC "
+        "LIMIT ?;";
+
+    if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_double(stmt, 1, minimumScore);
+        sqlite3_bind_int(stmt, 2, (int)limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            SNBAnomalyWindowRecord *record = [[SNBAnomalyWindowRecord alloc] init];
+            record.windowStart = sqlite3_column_int64(stmt, 0);
+            const unsigned char *ip = sqlite3_column_text(stmt, 1);
+            record.dstIP = ip ? [NSString stringWithUTF8String:(const char *)ip] : @"";
+            record.dstPort = sqlite3_column_int(stmt, 2);
+            record.proto = sqlite3_column_int(stmt, 3);
+            record.isNew = sqlite3_column_int(stmt, 4) != 0;
+            record.isRare = sqlite3_column_int(stmt, 5) != 0;
+            record.score = sqlite3_column_double(stmt, 6);
+            record.seenCount = sqlite3_column_int(stmt, 7);
+            [results addObject:record];
+        }
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
+- (void)storeExplanationForIP:(NSString *)ipAddress
+                  windowStart:(NSTimeInterval)windowStart
+                     riskBand:(NSString *)riskBand
+                      summary:(NSString *)summary
+                 evidenceTags:(NSArray<NSString *> *)evidenceTags
+                 promptVersion:(NSString *)promptVersion {
+    if (!self.db) {
+        return;
+    }
+    NSString *tagsJSON = @"[]";
+    NSError *error = nil;
+    NSData *tagsData = [NSJSONSerialization dataWithJSONObject:evidenceTags ?: @[] options:0 error:&error];
+    if (tagsData) {
+        NSString *encoded = [[NSString alloc] initWithData:tagsData encoding:NSUTF8StringEncoding];
+        if (encoded.length > 0) {
+            tagsJSON = encoded;
+        }
+    }
+
+    sqlite3_exec(self.db, "BEGIN;", NULL, NULL, NULL);
+    sqlite3_stmt *stmt = NULL;
+    const char *sql =
+        "INSERT OR REPLACE INTO anomaly_explanations ("
+        "window_start, dst_ip, risk_band, summary, evidence_tags, prompt_version, created_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, (sqlite3_int64)windowStart);
+        sqlite3_bind_text(stmt, 2, ipAddress.UTF8String, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, riskBand.UTF8String, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 4, summary.UTF8String, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 5, tagsJSON.UTF8String, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 6, promptVersion.UTF8String, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 7, (sqlite3_int64)[[NSDate date] timeIntervalSince1970]);
+        sqlite3_step(stmt);
+    }
+    sqlite3_finalize(stmt);
     sqlite3_exec(self.db, "COMMIT;", NULL, NULL, NULL);
 }
 

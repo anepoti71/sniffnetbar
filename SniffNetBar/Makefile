@@ -30,11 +30,13 @@ PCAP_LIBDIR = -L/opt/homebrew/lib -L/usr/local/lib
 PROJECT_INCLUDES = -I. -ICore -IConfig -IModels -INetwork -IThreatIntel -IThreatIntel/Providers -IUI -IUtils -ITests -ITests/ThreatIntel -ITests/ThreatIntel/Providers
 
 # Source files (organized by domain)
-CORE_SOURCES = Core/main.m Core/AppDelegate.m Core/AppCoordinator.m
+CORE_SOURCES = Core/main.m Core/AppDelegate.m Core/AppCoordinator.m \
+               Core/AnomalyExplainabilityCoordinator.m
 CONFIG_SOURCES = Config/ConfigurationManager.m Config/KeychainManager.m Config/UserDefaultsKeys.m
 MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m \
                 Models/AnomalyDetector.m Models/AnomalyStore.m \
-                Models/AnomalyPythonScorer.m Models/AnomalyCoreMLScorer.m
+                Models/AnomalyPythonScorer.m Models/AnomalyCoreMLScorer.m \
+                Models/AnomalyExplanationService.m
 NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m \
                   Network/DeviceManager.m
 THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \

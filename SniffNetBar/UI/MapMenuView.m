@@ -32,6 +32,7 @@
 @property (nonatomic, strong) dispatch_queue_t renderQueue;
 @property (nonatomic, assign) NSUInteger renderGeneration;
 @property (nonatomic, strong) NSDate *lastCacheCleanupTime;
+@property (nonatomic, strong) dispatch_semaphore_t geoLocationSemaphore;
 @end
 
 @implementation MapMenuView
@@ -66,6 +67,7 @@
         _failedLookups = [NSMutableSet set];
         _session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
         _renderQueue = dispatch_queue_create("com.sniffnetbar.map.render", DISPATCH_QUEUE_SERIAL);
+        _geoLocationSemaphore = dispatch_semaphore_create(5); // Limit to 5 concurrent geolocation requests
 
         NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProvider];
         NSString *defaultProvider = [ConfigurationManager sharedManager].defaultMapProvider;
@@ -477,32 +479,40 @@
 }
 
 - (void)fetchLocationForIP:(NSString *)ip completion:(void (^)(CLLocationCoordinate2D, BOOL))completion {
-    NSString *provider = self.providerName.length > 0 ? self.providerName : @"ipinfo.io";
-    NSString *encodedIP = [ip stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
-    NSString *urlString = nil;
-    
-    if ([provider isEqualToString:@"ip-api.com"]) {
-        urlString = [NSString stringWithFormat:@"https://ip-api.com/json/%@?fields=status,message,lat,lon,query", encodedIP];
-    } else if ([provider isEqualToString:@"ipinfo.io"]) {
-        urlString = [NSString stringWithFormat:@"https://ipinfo.io/%@/json", encodedIP];
-    } else {
-        NSString *template = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProviderURLTemplate];
-        if (template.length == 0) {
+    // Acquire semaphore to limit concurrent requests (prevents rate limiting)
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        dispatch_semaphore_wait(self.geoLocationSemaphore, DISPATCH_TIME_FOREVER);
+
+        NSString *provider = self.providerName.length > 0 ? self.providerName : @"ipinfo.io";
+        NSString *encodedIP = [ip stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+        NSString *urlString = nil;
+
+        if ([provider isEqualToString:@"ip-api.com"]) {
+            urlString = [NSString stringWithFormat:@"https://ip-api.com/json/%@?fields=status,message,lat,lon,query", encodedIP];
+        } else if ([provider isEqualToString:@"ipinfo.io"]) {
+            urlString = [NSString stringWithFormat:@"https://ipinfo.io/%@/json", encodedIP];
+        } else {
+            NSString *template = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProviderURLTemplate];
+            if (template.length == 0) {
+                dispatch_semaphore_signal(self.geoLocationSemaphore);
+                completion(kCLLocationCoordinate2DInvalid, NO);
+                return;
+            }
+            urlString = [NSString stringWithFormat:template, encodedIP];
+        }
+
+        NSURL *url = [NSURL URLWithString:urlString];
+        if (!url) {
+            dispatch_semaphore_signal(self.geoLocationSemaphore);
             completion(kCLLocationCoordinate2DInvalid, NO);
             return;
         }
-        urlString = [NSString stringWithFormat:template, encodedIP];
-    }
-    
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) {
-        completion(kCLLocationCoordinate2DInvalid, NO);
-        return;
-    }
-    
-    SNBLogUIDebug(" lookup %{public}@ via %{public}@", ip, urlString);
-    
-    NSURLSessionDataTask *task = [self.session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+
+        SNBLogUIDebug(" lookup %{public}@ via %{public}@", ip, urlString);
+
+        NSURLSessionDataTask *task = [self.session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            // Release semaphore when request completes
+            dispatch_semaphore_signal(self.geoLocationSemaphore);
         NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
         if (error || !data) {
             SNBLogUIDebug(" lookup failed for %{public}@: %{public}@", ip, error.localizedDescription);
@@ -608,8 +618,9 @@
             SNBLogUIDebug(" location missing for %{public}@ (%{public}@)", ip, provider);
             completion(kCLLocationCoordinate2DInvalid, NO);
         }
-    }];
-    [task resume];
+        }];
+        [task resume];
+    });
 }
 
 #pragma mark - WKNavigationDelegate

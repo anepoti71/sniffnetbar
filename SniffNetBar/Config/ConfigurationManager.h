@@ -52,6 +52,13 @@ extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 @property (nonatomic, readonly) NSUInteger threatIntelCacheSize;
 @property (nonatomic, readonly) NSTimeInterval threatIntelCacheTTL;
 
+// Explainability Configuration
+@property (nonatomic, readonly) BOOL explainabilityEnabled;
+@property (nonatomic, readonly) NSString *explainabilityOllamaBaseURL;
+@property (nonatomic, readonly) NSString *explainabilityOllamaModel;
+@property (nonatomic, readonly) NSTimeInterval explainabilityOllamaTimeout;
+@property (nonatomic, readonly) double explainabilityMinScore;
+
 // VirusTotal Provider Configuration
 @property (nonatomic, readonly) BOOL virusTotalEnabled;
 @property (nonatomic, readonly) NSString *virusTotalAPIURL;

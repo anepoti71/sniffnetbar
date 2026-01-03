@@ -17,6 +17,7 @@
 #import "TrafficStatistics.h"
 #import "AnomalyDetector.h"
 #import "AnomalyStore.h"
+#import "AnomalyExplainabilityCoordinator.h"
 
 @interface AppCoordinator ()
 @property (nonatomic, strong, readwrite) TrafficStatistics *statistics;
@@ -25,6 +26,7 @@
 @property (nonatomic, strong, readwrite) ThreatIntelCoordinator *threatIntelCoordinator;
 @property (nonatomic, strong, readwrite) ConfigurationManager *configuration;
 @property (nonatomic, strong) SNBAnomalyDetector *anomalyDetector;
+@property (nonatomic, strong) SNBAnomalyExplainabilityCoordinator *anomalyExplainabilityCoordinator;
 @property (nonatomic, strong) NSTimer *updateTimer;
 @property (nonatomic, strong) NSTimer *deviceRefreshTimer;
 @property (nonatomic, strong) NSTimer *anomalyRetrainTimer;
@@ -54,6 +56,9 @@
                                            configuration:_configuration];
         _threatIntelCoordinator = [[ThreatIntelCoordinator alloc] initWithConfiguration:_configuration];
         _anomalyDetector = [[SNBAnomalyDetector alloc] initWithWindowSeconds:60.0];
+        _anomalyExplainabilityCoordinator = [[SNBAnomalyExplainabilityCoordinator alloc]
+                                             initWithConfiguration:_configuration
+                                             threatIntelCoordinator:_threatIntelCoordinator];
 
         // Set up callback for packet updates
         __weak typeof(self) weakSelf = self;
@@ -85,6 +90,7 @@
         if (strongSelf) {
             [strongSelf updateMenuIfNeeded];
             [strongSelf.anomalyDetector flushIfNeeded];
+            [strongSelf.anomalyExplainabilityCoordinator processPendingExplanations];
         }
     }];
     [[NSRunLoop mainRunLoop] addTimer:self.updateTimer forMode:NSRunLoopCommonModes];
@@ -333,13 +339,48 @@
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = @"/usr/bin/python3";
     task.arguments = [@[scriptPath] arrayByAddingObjectsFromArray:arguments];
-    task.standardOutput = [NSPipe pipe];
-    task.standardError = [NSPipe pipe];
+
+    NSPipe *outputPipe = [NSPipe pipe];
+    NSPipe *errorPipe = [NSPipe pipe];
+    task.standardOutput = outputPipe;
+    task.standardError = errorPipe;
+
+    // Read pipes asynchronously to prevent deadlock if output exceeds buffer size
+    NSMutableData *outputData = [NSMutableData data];
+    NSMutableData *errorData = [NSMutableData data];
+
+    outputPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
+        NSData *data = [handle availableData];
+        if (data.length > 0) {
+            [outputData appendData:data];
+        }
+    };
+
+    errorPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
+        NSData *data = [handle availableData];
+        if (data.length > 0) {
+            [errorData appendData:data];
+        }
+    };
 
     @try {
         [task launch];
         [task waitUntilExit];
+
+        // Clean up handlers after task completes
+        outputPipe.fileHandleForReading.readabilityHandler = nil;
+        errorPipe.fileHandleForReading.readabilityHandler = nil;
+
+        // Log output if task failed
+        if (task.terminationStatus != 0 && errorData.length > 0) {
+            NSString *errorString = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
+            if (errorString) {
+                SNBLogWarn("Python script failed with error: %{public}@", errorString);
+            }
+        }
     } @catch (NSException *exception) {
+        outputPipe.fileHandleForReading.readabilityHandler = nil;
+        errorPipe.fileHandleForReading.readabilityHandler = nil;
         return NO;
     }
 

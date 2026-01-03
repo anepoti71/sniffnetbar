@@ -86,7 +86,12 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
         @"MaxConnectionLinesToShow": @10,
         @"ConnectionLineColor": @"#ff7a18",
         @"ConnectionLineWeight": @3,
-        @"ConnectionLineOpacity": @0.9
+        @"ConnectionLineOpacity": @0.9,
+        @"ExplainabilityEnabled": @YES,
+        @"ExplainabilityOllamaBaseURL": @"http://127.0.0.1:11434",
+        @"ExplainabilityOllamaModel": @"llama3.1",
+        @"ExplainabilityOllamaTimeout": @10.0,
+        @"ExplainabilityMinScore": @0.90
     };
     SNBLogConfigInfo("Using default configuration");
     NSError *validationError = nil;
@@ -126,6 +131,20 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
     }
     if (self.threatIntelCacheSize == 0 || self.threatIntelCacheTTL <= 0) {
         [issues addObject:@"Threat intel cache size and TTL must be greater than 0."];
+    }
+    if (self.explainabilityEnabled) {
+        if (self.explainabilityOllamaBaseURL.length == 0) {
+            [issues addObject:@"ExplainabilityOllamaBaseURL must be set when explainability is enabled."];
+        }
+        if (self.explainabilityOllamaModel.length == 0) {
+            [issues addObject:@"ExplainabilityOllamaModel must be set when explainability is enabled."];
+        }
+        if (self.explainabilityOllamaTimeout <= 0) {
+            [issues addObject:@"ExplainabilityOllamaTimeout must be greater than 0."];
+        }
+        if (self.explainabilityMinScore < 0.0 || self.explainabilityMinScore > 1.0) {
+            [issues addObject:@"ExplainabilityMinScore must be between 0.0 and 1.0."];
+        }
     }
     if (self.defaultMapProvider.length == 0) {
         [issues addObject:@"DefaultMapProvider must be a non-empty string."];
@@ -276,6 +295,33 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
 - (NSTimeInterval)threatIntelCacheTTL {
     NSNumber *value = self.configuration[@"ThreatIntelCacheTTL"];
     return value ? [value doubleValue] : 3600.0;
+}
+
+#pragma mark - Explainability Configuration
+
+- (BOOL)explainabilityEnabled {
+    NSNumber *value = self.configuration[@"ExplainabilityEnabled"];
+    return value ? [value boolValue] : YES;
+}
+
+- (NSString *)explainabilityOllamaBaseURL {
+    NSString *value = self.configuration[@"ExplainabilityOllamaBaseURL"];
+    return value.length > 0 ? value : @"http://127.0.0.1:11434";
+}
+
+- (NSString *)explainabilityOllamaModel {
+    NSString *value = self.configuration[@"ExplainabilityOllamaModel"];
+    return value.length > 0 ? value : @"llama3.1";
+}
+
+- (NSTimeInterval)explainabilityOllamaTimeout {
+    NSNumber *value = self.configuration[@"ExplainabilityOllamaTimeout"];
+    return value ? [value doubleValue] : 10.0;
+}
+
+- (double)explainabilityMinScore {
+    NSNumber *value = self.configuration[@"ExplainabilityMinScore"];
+    return value ? [value doubleValue] : 0.90;
 }
 
 #pragma mark - VirusTotal Provider Configuration
