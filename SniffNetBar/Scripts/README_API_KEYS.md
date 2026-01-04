@@ -1,6 +1,6 @@
 # SniffNetBar API Key Management
 
-API keys for threat intelligence providers (VirusTotal and AbuseIPDB) are now stored securely in the macOS Keychain instead of plaintext configuration files.
+API keys for threat intelligence providers (VirusTotal, AbuseIPDB, and GreyNoise) are now stored securely in the macOS Keychain instead of plaintext configuration files.
 
 ## Command-Line Tools
 
@@ -27,6 +27,11 @@ AbuseIPDB:
   Identifier: AbuseIPDBAPIKey
   Status:     ✗ Not configured
   Key:        (not set)
+
+GreyNoise:
+  Identifier: GreyNoiseAPIKey
+  Status:     ✗ Not configured
+  Key:        (not set)
 ```
 
 ### 2. Set API Key
@@ -45,11 +50,15 @@ Add or update an API key:
 
 # Set AbuseIPDB API key
 ./build/set_apikey abuseipdb YOUR_ABUSEIPDB_API_KEY_HERE
+
+# Set GreyNoise API key
+./build/set_apikey greynoise YOUR_GREYNOISE_API_KEY_HERE
 ```
 
 **Supported providers:**
 - `virustotal` - VirusTotal API key
 - `abuseipdb` - AbuseIPDB API key
+- `greynoise` - GreyNoise API key
 
 ### 3. Remove API Key
 
@@ -68,6 +77,9 @@ Remove an API key from the keychain:
 # Remove AbuseIPDB API key
 ./build/remove_apikey abuseipdb
 
+# Remove GreyNoise API key
+./build/remove_apikey greynoise
+
 # Remove all API keys
 ./build/remove_apikey all
 ```
@@ -85,6 +97,11 @@ Remove an API key from the keychain:
 2. Navigate to API settings
 3. Generate an API key
 4. Run: `./build/set_apikey abuseipdb YOUR_KEY_HERE`
+
+### GreyNoise
+1. Create a free Community account at https://www.greynoise.io/
+2. Generate a Community API key
+3. Run: `./build/set_apikey greynoise YOUR_KEY_HERE`
 
 ## Security
 
@@ -112,6 +129,7 @@ After setting your API keys:
    ```
    VirusTotal provider configured successfully
    AbuseIPDB provider configured successfully
+   GreyNoise provider configured successfully
    ```
 
 4. **Enable threat intelligence:** Click the menu bar icon → "Enable Threat Intelligence"
@@ -124,6 +142,7 @@ After setting your API keys:
 # Check keychain directly
 security find-generic-password -s 'com.sniffnetbar.api-keys' -a 'VirusTotalAPIKey' -w
 security find-generic-password -s 'com.sniffnetbar.api-keys' -a 'AbuseIPDBAPIKey' -w
+security find-generic-password -s 'com.sniffnetbar.api-keys' -a 'GreyNoiseAPIKey' -w
 ```
 
 ### Remove and re-add keys
@@ -135,6 +154,7 @@ security find-generic-password -s 'com.sniffnetbar.api-keys' -a 'AbuseIPDBAPIKey
 # Re-add them
 ./build/set_apikey virustotal YOUR_KEY
 ./build/set_apikey abuseipdb YOUR_KEY
+./build/set_apikey greynoise YOUR_KEY
 
 # Verify
 ./build/list_apikeys
@@ -145,9 +165,11 @@ security find-generic-password -s 'com.sniffnetbar.api-keys' -a 'AbuseIPDBAPIKey
 ```bash
 # View keychain item details
 security find-generic-password -s 'com.sniffnetbar.api-keys' -a 'VirusTotalAPIKey'
+security find-generic-password -s 'com.sniffnetbar.api-keys' -a 'GreyNoiseAPIKey'
 
 # Delete manually
 security delete-generic-password -s 'com.sniffnetbar.api-keys' -a 'VirusTotalAPIKey'
+security delete-generic-password -s 'com.sniffnetbar.api-keys' -a 'GreyNoiseAPIKey'
 ```
 
 ## Building the Tools

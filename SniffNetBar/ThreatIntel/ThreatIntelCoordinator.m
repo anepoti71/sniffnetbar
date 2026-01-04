@@ -10,6 +10,7 @@
 #import "UserDefaultsKeys.h"
 #import "VirusTotalProvider.h"
 #import "AbuseIPDBProvider.h"
+#import "GreyNoiseProvider.h"
 #import "IPAddressUtilities.h"
 #import "Logger.h"
 
@@ -84,6 +85,28 @@
         SNBLogThreatIntelDebug("AbuseIPDB provider disabled (enabled: %{public}@, has key: %{public}@)",
                                config.abuseIPDBEnabled ? @"YES" : @"NO",
                                config.abuseIPDBAPIKey.length > 0 ? @"YES" : @"NO");
+    }
+
+    if (config.greyNoiseEnabled && config.greyNoiseAPIKey.length > 0) {
+        GreyNoiseProvider *greyNoiseProvider = [[GreyNoiseProvider alloc] initWithTTL:config.greyNoiseTTL
+                                                                           negativeTTL:3600.0];
+        [greyNoiseProvider configureWithBaseURL:config.greyNoiseAPIURL
+                                         APIKey:config.greyNoiseAPIKey
+                                        timeout:config.greyNoiseTimeout
+                              maxRequestsPerMin:config.greyNoiseMaxRequestsPerMin
+                                     completion:^(NSError *error) {
+            if (error) {
+                SNBLogThreatIntelError("Failed to configure GreyNoise: %{public}@", error.localizedDescription);
+            } else {
+                SNBLogThreatIntelInfo("GreyNoise provider configured successfully");
+            }
+        }];
+        [self.facade addProvider:greyNoiseProvider];
+        SNBLogThreatIntelDebug("GreyNoise provider added");
+    } else {
+        SNBLogThreatIntelDebug("GreyNoise provider disabled (enabled: %{public}@, has key: %{public}@)",
+                               config.greyNoiseEnabled ? @"YES" : @"NO",
+                               config.greyNoiseAPIKey.length > 0 ? @"YES" : @"NO");
     }
 
     SNBLogThreatIntelInfo("Threat Intelligence initialized (enabled: %{public}@)", self.isEnabled ? @"YES" : @"NO");

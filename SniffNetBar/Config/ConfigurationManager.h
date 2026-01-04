@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 // Keychain identifier constants for API keys
 extern NSString * const kVirusTotalAPIKeyIdentifier;
 extern NSString * const kAbuseIPDBAPIKeyIdentifier;
+extern NSString * const kGreyNoiseAPIKeyIdentifier;
 
 /**
  * Centralized configuration manager that loads settings from Configuration.plist
@@ -76,6 +77,14 @@ extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 @property (nonatomic, readonly) NSTimeInterval abuseIPDBTTL;
 @property (nonatomic, readonly) NSInteger abuseIPDBMaxAgeInDays;
 
+// GreyNoise Provider Configuration
+@property (nonatomic, readonly) BOOL greyNoiseEnabled;
+@property (nonatomic, readonly) NSString *greyNoiseAPIURL;
+@property (nonatomic, readonly) NSString *greyNoiseAPIKey;
+@property (nonatomic, readonly) NSTimeInterval greyNoiseTimeout;
+@property (nonatomic, readonly) NSInteger greyNoiseMaxRequestsPerMin;
+@property (nonatomic, readonly) NSTimeInterval greyNoiseTTL;
+
 /**
  * Reload configuration from the plist file
  * Useful if the configuration file is modified at runtime
@@ -90,7 +99,7 @@ extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 /**
  * Set an API key in the keychain
  * @param apiKey The API key to store (if nil or empty, removes the keychain item)
- * @param identifier The keychain identifier (use kVirusTotalAPIKeyIdentifier or kAbuseIPDBAPIKeyIdentifier)
+ * @param identifier The keychain identifier (use kVirusTotalAPIKeyIdentifier, kAbuseIPDBAPIKeyIdentifier, or kGreyNoiseAPIKeyIdentifier)
  */
 - (void)setAPIKey:(nullable NSString *)apiKey forIdentifier:(NSString *)identifier;
 

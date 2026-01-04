@@ -12,6 +12,7 @@
 // Define keychain identifier constants
 NSString * const kVirusTotalAPIKeyIdentifier = @"VirusTotalAPIKey";
 NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
+NSString * const kGreyNoiseAPIKeyIdentifier = @"GreyNoiseAPIKey";
 
 @interface ConfigurationManager ()
 @property (nonatomic, strong) NSDictionary *configuration;
@@ -177,6 +178,21 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
         }
         if (self.abuseIPDBTimeout <= 0) {
             [issues addObject:@"AbuseIPDBTimeout must be greater than 0."];
+        }
+    }
+
+    if (self.greyNoiseEnabled) {
+        if (self.greyNoiseAPIURL.length == 0) {
+            [issues addObject:@"GreyNoiseAPIURL must be set when GreyNoise is enabled."];
+        }
+        if (self.greyNoiseAPIKey.length == 0) {
+            [issues addObject:@"GreyNoiseAPIKey must be set when GreyNoise is enabled."];
+        }
+        if (self.greyNoiseMaxRequestsPerMin <= 0) {
+            [issues addObject:@"GreyNoiseMaxRequestsPerMin must be greater than 0."];
+        }
+        if (self.greyNoiseTimeout <= 0) {
+            [issues addObject:@"GreyNoiseTimeout must be greater than 0."];
         }
     }
 
@@ -427,6 +443,53 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
 - (NSInteger)abuseIPDBMaxAgeInDays {
     NSNumber *value = self.configuration[@"AbuseIPDBMaxAgeInDays"];
     return value ? [value integerValue] : 90;
+}
+
+#pragma mark - GreyNoise Provider Configuration
+
+- (BOOL)greyNoiseEnabled {
+    NSNumber *value = self.configuration[@"GreyNoiseEnabled"];
+    return value ? [value boolValue] : NO;
+}
+
+- (NSString *)greyNoiseAPIURL {
+    NSString *value = self.configuration[@"GreyNoiseAPIURL"];
+    return value.length > 0 ? value : @"https://api.greynoise.io/v3";
+}
+
+- (NSString *)greyNoiseAPIKey {
+    NSError *error = nil;
+    NSString *keychainKey = [KeychainManager getAPIKeyForIdentifier:kGreyNoiseAPIKeyIdentifier
+                                                              error:&error];
+    if (keychainKey.length > 0) {
+        return keychainKey;
+    }
+
+    NSString *plistKey = self.configuration[@"GreyNoiseAPIKey"];
+    if (plistKey.length > 0 && ![plistKey isEqualToString:@"YOUR_API_KEY_HERE"]) {
+        [KeychainManager saveAPIKey:plistKey
+                      forIdentifier:kGreyNoiseAPIKeyIdentifier
+                              error:nil];
+        SNBLogConfigInfo("Migrated GreyNoise API key to keychain");
+        return plistKey;
+    }
+
+    return @"";
+}
+
+- (NSTimeInterval)greyNoiseTimeout {
+    NSNumber *value = self.configuration[@"GreyNoiseTimeout"];
+    return value ? [value doubleValue] : 10.0;
+}
+
+- (NSInteger)greyNoiseMaxRequestsPerMin {
+    NSNumber *value = self.configuration[@"GreyNoiseMaxRequestsPerMin"];
+    return value ? [value integerValue] : 60;
+}
+
+- (NSTimeInterval)greyNoiseTTL {
+    NSNumber *value = self.configuration[@"GreyNoiseTTL"];
+    return value ? [value doubleValue] : 86400.0;
 }
 
 #pragma mark - API Key Management

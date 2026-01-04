@@ -98,5 +98,19 @@
 	<real>86400.0</real>
 	<key>AbuseIPDBMaxAgeInDays</key>
 	<integer>90</integer>
+
+	<!-- GreyNoise Provider Configuration -->
+	<key>GreyNoiseEnabled</key>
+	<true/>
+	<key>GreyNoiseAPIURL</key>
+	<string>https://api.greynoise.io/v3</string>
+	<key>GreyNoiseAPIKey</key>
+	<string>YOUR_API_KEY_HERE</string>
+	<key>GreyNoiseTimeout</key>
+	<real>10.0</real>
+	<key>GreyNoiseMaxRequestsPerMin</key>
+	<integer>60</integer>
+	<key>GreyNoiseTTL</key>
+	<real>86400.0</real>
 </dict>
 </plist>

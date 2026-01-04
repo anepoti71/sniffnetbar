@@ -8,11 +8,13 @@
 #import <XCTest/XCTest.h>
 #import "VirusTotalProvider.h"
 #import "AbuseIPDBProvider.h"
+#import "GreyNoiseProvider.h"
 #import "ThreatIntelModels.h"
 
 @interface ProviderTests : XCTestCase
 @property (nonatomic, strong) VirusTotalProvider *vtProvider;
 @property (nonatomic, strong) AbuseIPDBProvider *abuseProvider;
+@property (nonatomic, strong) GreyNoiseProvider *greyNoiseProvider;
 @end
 
 @implementation ProviderTests
@@ -23,11 +25,13 @@
     self.abuseProvider = [[AbuseIPDBProvider alloc] initWithTTL:3600
                                                      negativeTTL:300
                                                    maxAgeInDays:90];
+    self.greyNoiseProvider = [[GreyNoiseProvider alloc] initWithTTL:3600 negativeTTL:300];
 }
 
 - (void)tearDown {
     self.vtProvider = nil;
     self.abuseProvider = nil;
+    self.greyNoiseProvider = nil;
     [super tearDown];
 }
 
@@ -133,6 +137,56 @@
     [self waitForExpectationsWithTimeout:1.0 handler:nil];
 }
 
+#pragma mark - GreyNoise Provider Tests
+
+- (void)testGreyNoiseProviderInitialization {
+    XCTAssertNotNil(self.greyNoiseProvider, @"GreyNoise provider should initialize");
+    XCTAssertEqualObjects(self.greyNoiseProvider.name, @"GreyNoise", @"Provider name should be GreyNoise");
+    XCTAssertEqual(self.greyNoiseProvider.defaultTTL, 3600, @"Default TTL should match");
+    XCTAssertEqual(self.greyNoiseProvider.negativeCacheTTL, 300, @"Negative cache TTL should match");
+}
+
+- (void)testGreyNoiseConfiguration {
+    XCTestExpectation *expectation = [self expectationWithDescription:@"Configuration complete"];
+
+    [self.greyNoiseProvider configureWithBaseURL:@"https://api.greynoise.io/v3"
+                                          APIKey:@"test-api-key"
+                                         timeout:10.0
+                               maxRequestsPerMin:60
+                                      completion:^(NSError *error) {
+        XCTAssertNil(error, @"Configuration should not error");
+        [expectation fulfill];
+    }];
+
+    [self waitForExpectationsWithTimeout:1.0 handler:nil];
+}
+
+- (void)testGreyNoiseSupportsIPv4 {
+    BOOL supports = [self.greyNoiseProvider supportsIndicatorType:TIIndicatorTypeIPv4];
+    XCTAssertTrue(supports, @"Should support IPv4");
+}
+
+- (void)testGreyNoiseDoesNotSupportIPv6 {
+    BOOL supports = [self.greyNoiseProvider supportsIndicatorType:TIIndicatorTypeIPv6];
+    XCTAssertFalse(supports, @"Should not support IPv6");
+}
+
+- (void)testGreyNoiseDoesNotSupportDomain {
+    BOOL supports = [self.greyNoiseProvider supportsIndicatorType:TIIndicatorTypeDomain];
+    XCTAssertFalse(supports, @"Should not support Domain");
+}
+
+- (void)testGreyNoiseHealthCheck {
+    XCTestExpectation *expectation = [self expectationWithDescription:@"Health check complete"];
+
+    [self.greyNoiseProvider isHealthyWithCompletion:^(BOOL healthy) {
+        XCTAssertTrue(healthy, @"Provider should be healthy");
+        [expectation fulfill];
+    }];
+
+    [self waitForExpectationsWithTimeout:1.0 handler:nil];
+}
+
 #pragma mark - Custom Initialization Tests
 
 - (void)testVirusTotalCustomTTL {
@@ -146,6 +200,13 @@
     AbuseIPDBProvider *provider = [[AbuseIPDBProvider alloc] initWithTTL:7200
                                                               negativeTTL:600
                                                             maxAgeInDays:30];
+
+    XCTAssertEqual(provider.defaultTTL, 7200, @"Custom TTL should be set");
+    XCTAssertEqual(provider.negativeCacheTTL, 600, @"Custom negative TTL should be set");
+}
+
+- (void)testGreyNoiseCustomTTL {
+    GreyNoiseProvider *provider = [[GreyNoiseProvider alloc] initWithTTL:7200 negativeTTL:600];
 
     XCTAssertEqual(provider.defaultTTL, 7200, @"Custom TTL should be set");
     XCTAssertEqual(provider.negativeCacheTTL, 600, @"Custom negative TTL should be set");
@@ -167,6 +228,17 @@
         XCTAssertFalse([provider supportsIndicatorType:TIIndicatorTypeURL],
                       @"%@ should not support URL", provider.name);
     }
+}
+
+- (void)testGreyNoiseSupportsOnlyIPv4 {
+    XCTAssertTrue([self.greyNoiseProvider supportsIndicatorType:TIIndicatorTypeIPv4],
+                  @"GreyNoise should support IPv4");
+    XCTAssertFalse([self.greyNoiseProvider supportsIndicatorType:TIIndicatorTypeIPv6],
+                   @"GreyNoise should not support IPv6");
+    XCTAssertFalse([self.greyNoiseProvider supportsIndicatorType:TIIndicatorTypeDomain],
+                   @"GreyNoise should not support Domain");
+    XCTAssertFalse([self.greyNoiseProvider supportsIndicatorType:TIIndicatorTypeURL],
+                   @"GreyNoise should not support URL");
 }
 
 #pragma mark - Configuration URL Tests
@@ -194,6 +266,21 @@
                                      timeout:15.0
                            maxRequestsPerMin:120
                                   completion:^(NSError *error) {
+        XCTAssertNil(error, @"Should configure with custom URL");
+        [expectation fulfill];
+    }];
+
+    [self waitForExpectationsWithTimeout:1.0 handler:nil];
+}
+
+- (void)testGreyNoiseCustomBaseURL {
+    XCTestExpectation *expectation = [self expectationWithDescription:@"Configuration complete"];
+
+    [self.greyNoiseProvider configureWithBaseURL:@"https://custom.api.greynoise.io/v3"
+                                          APIKey:@"test-key"
+                                         timeout:15.0
+                               maxRequestsPerMin:120
+                                      completion:^(NSError *error) {
         XCTAssertNil(error, @"Should configure with custom URL");
         [expectation fulfill];
     }];

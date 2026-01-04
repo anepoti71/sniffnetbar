@@ -12,6 +12,7 @@
 
 extern NSString * const kVirusTotalAPIKeyIdentifier;
 extern NSString * const kAbuseIPDBAPIKeyIdentifier;
+extern NSString * const kGreyNoiseAPIKeyIdentifier;
 
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
@@ -21,6 +22,7 @@ int main(int argc, const char * argv[]) {
         SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "Test 1: Saving API keys to keychain...");
         NSString *testVTKey = @"test_virustotal_key_12345";
         NSString *testAbuseKey = @"test_abuseipdb_key_67890";
+        NSString *testGreyNoiseKey = @"test_greynoise_key_13579";
 
         NSError *error = nil;
         BOOL saveVTSuccess = [KeychainManager saveAPIKey:testVTKey
@@ -41,6 +43,17 @@ int main(int argc, const char * argv[]) {
             SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ AbuseIPDB API key saved successfully");
         } else {
             SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ Failed to save AbuseIPDB API key: %{public}@", error.localizedDescription);
+            return 1;
+        }
+
+        error = nil;
+        BOOL saveGreyNoiseSuccess = [KeychainManager saveAPIKey:testGreyNoiseKey
+                                                  forIdentifier:kGreyNoiseAPIKeyIdentifier
+                                                          error:&error];
+        if (saveGreyNoiseSuccess) {
+            SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ GreyNoise API key saved successfully");
+        } else {
+            SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ Failed to save GreyNoise API key: %{public}@", error.localizedDescription);
             return 1;
         }
 
@@ -66,10 +79,21 @@ int main(int argc, const char * argv[]) {
             return 1;
         }
 
+        error = nil;
+        NSString *retrievedGreyNoiseKey = [KeychainManager getAPIKeyForIdentifier:kGreyNoiseAPIKeyIdentifier
+                                                                            error:&error];
+        if (retrievedGreyNoiseKey && [retrievedGreyNoiseKey isEqualToString:testGreyNoiseKey]) {
+            SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ GreyNoise API key retrieved successfully: %{public}@", retrievedGreyNoiseKey);
+        } else {
+            SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ Failed to retrieve GreyNoise API key or mismatch. Got: %{public}@, Expected: %{public}@", retrievedGreyNoiseKey, testGreyNoiseKey);
+            return 1;
+        }
+
         // Test 3: Check existence
         SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "\nTest 3: Checking key existence...");
         BOOL vtExists = [KeychainManager hasAPIKeyForIdentifier:kVirusTotalAPIKeyIdentifier];
         BOOL abuseExists = [KeychainManager hasAPIKeyForIdentifier:kAbuseIPDBAPIKeyIdentifier];
+        BOOL greyNoiseExists = [KeychainManager hasAPIKeyForIdentifier:kGreyNoiseAPIKeyIdentifier];
 
         if (vtExists) {
             SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ VirusTotal API key exists in keychain");
@@ -82,6 +106,13 @@ int main(int argc, const char * argv[]) {
             SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ AbuseIPDB API key exists in keychain");
         } else {
             SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ AbuseIPDB API key not found in keychain");
+            return 1;
+        }
+
+        if (greyNoiseExists) {
+            SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ GreyNoise API key exists in keychain");
+        } else {
+            SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ GreyNoise API key not found in keychain");
             return 1;
         }
 
@@ -115,6 +146,7 @@ int main(int argc, const char * argv[]) {
 
         NSString *configVTKey = config.virusTotalAPIKey;
         NSString *configAbuseKey = config.abuseIPDBAPIKey;
+        NSString *configGreyNoiseKey = config.greyNoiseAPIKey;
 
         if ([configVTKey isEqualToString:updatedVTKey]) {
             SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ ConfigurationManager returns correct VirusTotal key: %{public}@", configVTKey);
@@ -127,6 +159,13 @@ int main(int argc, const char * argv[]) {
             SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ ConfigurationManager returns correct AbuseIPDB key: %{public}@", configAbuseKey);
         } else {
             SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ ConfigurationManager AbuseIPDB key mismatch. Got: %{public}@, Expected: %{public}@", configAbuseKey, testAbuseKey);
+            return 1;
+        }
+
+        if ([configGreyNoiseKey isEqualToString:testGreyNoiseKey]) {
+            SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ ConfigurationManager returns correct GreyNoise key: %{public}@", configGreyNoiseKey);
+        } else {
+            SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ ConfigurationManager GreyNoise key mismatch. Got: %{public}@, Expected: %{public}@", configGreyNoiseKey, testGreyNoiseKey);
             return 1;
         }
 
@@ -168,10 +207,29 @@ int main(int argc, const char * argv[]) {
             return 1;
         }
 
+        error = nil;
+        BOOL deleteGreyNoiseSuccess = [KeychainManager deleteAPIKeyForIdentifier:kGreyNoiseAPIKeyIdentifier
+                                                                           error:&error];
+        if (deleteGreyNoiseSuccess) {
+            SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ GreyNoise API key deleted successfully");
+
+            BOOL stillExists = [KeychainManager hasAPIKeyForIdentifier:kGreyNoiseAPIKeyIdentifier];
+            if (!stillExists) {
+                SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ Verified GreyNoise key no longer exists");
+            } else {
+                SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ GreyNoise key still exists after deletion");
+                return 1;
+            }
+        } else {
+            SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ Failed to delete GreyNoise API key: %{public}@", error.localizedDescription);
+            return 1;
+        }
+
         // Test 7: Verify ConfigurationManager returns empty after deletion
         SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "\nTest 7: Verifying ConfigurationManager returns empty after deletion...");
         NSString *emptyVTKey = config.virusTotalAPIKey;
         NSString *emptyAbuseKey = config.abuseIPDBAPIKey;
+        NSString *emptyGreyNoiseKey = config.greyNoiseAPIKey;
 
         if (emptyVTKey.length == 0) {
             SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ ConfigurationManager returns empty for VirusTotal key");
@@ -184,6 +242,13 @@ int main(int argc, const char * argv[]) {
             SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ ConfigurationManager returns empty for AbuseIPDB key");
         } else {
             SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ ConfigurationManager still returns key after deletion: %{public}@", emptyAbuseKey);
+            return 1;
+        }
+
+        if (emptyGreyNoiseKey.length == 0) {
+            SNB_LOG(SNBLogLevelInfo, SNB_LOG_CATEGORY_CORE, "✓ ConfigurationManager returns empty for GreyNoise key");
+        } else {
+            SNB_LOG(SNBLogLevelError, SNB_LOG_CATEGORY_CORE, "✗ ConfigurationManager still returns key after deletion: %{public}@", emptyGreyNoiseKey);
             return 1;
         }
 

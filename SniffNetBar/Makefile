@@ -46,7 +46,8 @@ THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/ThreatIntelFacade.m \
                       ThreatIntel/ThreatIntelCoordinator.m \
                       ThreatIntel/Providers/VirusTotalProvider.m \
-                      ThreatIntel/Providers/AbuseIPDBProvider.m
+                      ThreatIntel/Providers/AbuseIPDBProvider.m \
+                      ThreatIntel/Providers/GreyNoiseProvider.m
 UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m
 UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m Utils/AuthorizationHelper.m
 
@@ -98,8 +99,26 @@ $(MACOS_DIR):
 $(RESOURCES_DIR):
 	mkdir -p $(RESOURCES_DIR)
 
-# Command-line tools for API key management
+# Command-line tools for API key management and testing
 tools: $(BUILD_DIR)/set_apikey $(BUILD_DIR)/remove_apikey $(BUILD_DIR)/list_apikeys
+
+# Threat intelligence test utility
+test-threat-intel: $(BUILD_DIR)/test_threat_intel
+
+$(BUILD_DIR)/test_threat_intel: Tools/test_threat_intel.m $(BUILD_DIR)/Tests/ThreatIntel/MockThreatIntelProvider.o $(BUILD_DIR)/ThreatIntel/ThreatIntelFacade.o $(BUILD_DIR)/ThreatIntel/ThreatIntelModels.o $(BUILD_DIR)/ThreatIntel/ThreatIntelCache.o $(BUILD_DIR)/ThreatIntel/ThreatIntelProvider.o $(BUILD_DIR)/Utils/ExpiringCache.o $(BUILD_DIR)/Utils/Logger.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/IPAddressUtilities.o $(BUILD_DIR)/Config/KeychainManager.o | $(BUILD_DIR)
+	@echo "Building test_threat_intel tool..."
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Tools/test_threat_intel.m \
+		$(BUILD_DIR)/Tests/ThreatIntel/MockThreatIntelProvider.o \
+		$(BUILD_DIR)/ThreatIntel/ThreatIntelFacade.o \
+		$(BUILD_DIR)/ThreatIntel/ThreatIntelModels.o \
+		$(BUILD_DIR)/ThreatIntel/ThreatIntelCache.o \
+		$(BUILD_DIR)/ThreatIntel/ThreatIntelProvider.o \
+		$(BUILD_DIR)/Utils/ExpiringCache.o \
+		$(BUILD_DIR)/Utils/Logger.o \
+		$(BUILD_DIR)/Config/ConfigurationManager.o \
+		$(BUILD_DIR)/Utils/IPAddressUtilities.o \
+		$(BUILD_DIR)/Config/KeychainManager.o \
+		-o $@ $(FRAMEWORKS)
 
 $(BUILD_DIR)/set_apikey: Scripts/set_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o
 	@echo "Building set_apikey tool..."
@@ -151,4 +170,4 @@ $(BUILD_DIR)/TestRunner: $(LIB_OBJECTS) $(TEST_OBJECTS) | $(BUILD_DIR)
 test-build: $(LIB_OBJECTS) $(TEST_OBJECTS)
 	@echo "Test files compiled successfully"
 
-.PHONY: all clean install dmg run test tools test-build
+.PHONY: all clean install dmg run test tools test-build test-threat-intel
