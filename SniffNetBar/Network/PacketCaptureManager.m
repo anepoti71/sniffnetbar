@@ -167,7 +167,8 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
                 self.onPacketReceived(packetInfo);
             }
         } else if (result == 0) {
-            // Timeout - continue without additional sleep since pcap timeout provides backoff
+            // Timeout - sleep briefly to avoid busy-waiting at 100% CPU
+            usleep(10000); // 10ms sleep
             continue;
         } else if (result == -1) {
             // Error
