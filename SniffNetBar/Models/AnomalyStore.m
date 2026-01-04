@@ -72,9 +72,31 @@
 
 - (void)openDatabase {
     NSString *path = [SNBAnomalyStore defaultDatabasePath];
-    if (sqlite3_open([path fileSystemRepresentation], &_db) != SQLITE_OK) {
-        sqlite3_close(self.db);
-        self.db = NULL;
+
+    // Ensure the parent directory exists
+    NSString *directory = [path stringByDeletingLastPathComponent];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:directory]) {
+        NSError *error = nil;
+        if (![fm createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:&error]) {
+            NSLog(@"Failed to create database directory at %@: %@", directory, error);
+            return;
+        }
+    }
+
+    // Use sqlite3_open_v2 with explicit flags to create the database
+    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+    int result = sqlite3_open_v2([path fileSystemRepresentation], &_db, flags, NULL);
+
+    if (result != SQLITE_OK) {
+        NSLog(@"Failed to open/create database at %@: %s (error code: %d)",
+              path, sqlite3_errmsg(self.db), result);
+        if (self.db) {
+            sqlite3_close(self.db);
+            self.db = NULL;
+        }
+    } else {
+        NSLog(@"Successfully opened/created database at %@", path);
     }
 }
 
