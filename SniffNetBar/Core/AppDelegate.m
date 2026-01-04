@@ -8,11 +8,54 @@
 #import "AppDelegate.h"
 #import "AppCoordinator.h"
 #import "ConfigurationManager.h"
+#import "AuthorizationHelper.h"
 #import "Logger.h"
 
 @implementation AppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    if (self.authorizationChecked) {
+        [self initializeApplication];
+        return;
+    }
+
+    self.authorizationChecked = YES;
+
+    if (![AuthorizationHelper isRunningAsRoot]) {
+        SNBLogInfo("Not running as root, requesting authorization");
+
+        [AuthorizationHelper showAuthorizationDialog:^(BOOL accepted) {
+            if (accepted) {
+                SNBLogInfo("User accepted authorization request");
+                BOOL success = [AuthorizationHelper relaunchAsRoot];
+                if (!success) {
+                    SNBLogError("Failed to relaunch with root privileges");
+                    NSAlert *alert = [[NSAlert alloc] init];
+                    alert.messageText = @"Authorization Failed";
+                    alert.informativeText = @"Failed to obtain root privileges. The application will now quit.";
+                    alert.alertStyle = NSAlertStyleCritical;
+                    [alert addButtonWithTitle:@"OK"];
+                    [alert runModal];
+                    [NSApp terminate:nil];
+                }
+            } else {
+                SNBLogInfo("User declined authorization request");
+                NSAlert *alert = [[NSAlert alloc] init];
+                alert.messageText = @"Authorization Required";
+                alert.informativeText = @"SniffNetBar requires root privileges to capture network packets. The application will now quit.";
+                alert.alertStyle = NSAlertStyleWarning;
+                [alert addButtonWithTitle:@"OK"];
+                [alert runModal];
+                [NSApp terminate:nil];
+            }
+        }];
+    } else {
+        SNBLogInfo("Already running as root");
+        [self initializeApplication];
+    }
+}
+
+- (void)initializeApplication {
     // Create status item
     NSStatusBar *statusBar = [NSStatusBar systemStatusBar];
     self.statusItem = [statusBar statusItemWithLength:NSVariableStatusItemLength];

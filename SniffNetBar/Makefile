@@ -48,7 +48,7 @@ THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/Providers/VirusTotalProvider.m \
                       ThreatIntel/Providers/AbuseIPDBProvider.m
 UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m
-UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m
+UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m Utils/AuthorizationHelper.m
 
 # Test sources
 TEST_SOURCES = Tests/ThreatIntel/ThreatIntelCacheTests.m \
@@ -122,12 +122,16 @@ install: $(APP_BUNDLE)
 	@cp -R $(APP_BUNDLE) ~/Applications/
 	@echo "Installed to ~/Applications/$(APP_NAME).app"
 	@echo ""
-	@echo "Note: This application requires root privileges to capture packets."
-	@echo "You may need to run it with: sudo ~/Applications/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)"
+	@echo "Note: The application will request root privileges on startup for packet capture."
+
+dmg: $(APP_BUNDLE)
+	@echo "Creating DMG installer..."
+	@./Scripts/create_dmg.sh
 
 run: $(APP_BUNDLE)
-	@echo "Running $(APP_NAME) (requires sudo)..."
-	sudo $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
+	@echo "Running $(APP_NAME)..."
+	@echo "The application will request root privileges on startup."
+	open $(APP_BUNDLE)
 
 # Test targets
 TEST_BUNDLE = $(BUILD_DIR)/Tests.xctest
@@ -147,4 +151,4 @@ $(BUILD_DIR)/TestRunner: $(LIB_OBJECTS) $(TEST_OBJECTS) | $(BUILD_DIR)
 test-build: $(LIB_OBJECTS) $(TEST_OBJECTS)
 	@echo "Test files compiled successfully"
 
-.PHONY: all clean install run test tools test-build
+.PHONY: all clean install dmg run test tools test-build
