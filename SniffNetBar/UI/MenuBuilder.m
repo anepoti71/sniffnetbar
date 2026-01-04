@@ -139,13 +139,127 @@
     return connections;
 }
 
+#pragma mark - Styled Menu Item Helpers
+
+- (NSMenuItem *)styledMenuItemWithTitle:(NSString *)title style:(NSString *)style {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+    item.enabled = NO;
+
+    NSFont *font;
+    NSColor *color;
+
+    if ([style isEqualToString:@"header"]) {
+        // Bold header style
+        font = [NSFont boldSystemFontOfSize:13.0];
+        color = [NSColor labelColor];
+    } else if ([style isEqualToString:@"subheader"]) {
+        // Medium weight subheader
+        font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold];
+        color = [NSColor secondaryLabelColor];
+    } else if ([style isEqualToString:@"data"]) {
+        // Monospaced for data
+        font = [NSFont monospacedSystemFontOfSize:11.0 weight:NSFontWeightRegular];
+        color = [NSColor labelColor];
+    } else {
+        // Default
+        font = [NSFont menuFontOfSize:0.0];
+        color = [NSColor labelColor];
+    }
+
+    NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:title];
+    [attrString addAttribute:NSFontAttributeName value:font range:NSMakeRange(0, title.length)];
+    [attrString addAttribute:NSForegroundColorAttributeName value:color range:NSMakeRange(0, title.length)];
+    item.attributedTitle = attrString;
+
+    return item;
+}
+
+- (NSMenuItem *)styledStatItemWithLabel:(NSString *)label value:(NSString *)value color:(NSColor *)color {
+    NSString *fullText = [NSString stringWithFormat:@"%@  %@", label, value];
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
+    item.enabled = NO;
+
+    NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:fullText];
+
+    // Label in regular font
+    NSFont *labelFont = [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
+    [attrString addAttribute:NSFontAttributeName value:labelFont range:NSMakeRange(0, label.length)];
+    [attrString addAttribute:NSForegroundColorAttributeName value:[NSColor secondaryLabelColor] range:NSMakeRange(0, label.length)];
+
+    // Value in monospaced font with color
+    NSFont *valueFont = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightSemibold];
+    NSRange valueRange = NSMakeRange(label.length, value.length + 2); // +2 for the spaces
+    [attrString addAttribute:NSFontAttributeName value:valueFont range:valueRange];
+    [attrString addAttribute:NSForegroundColorAttributeName value:color range:valueRange];
+
+    item.attributedTitle = attrString;
+    return item;
+}
+
+- (NSMenuItem *)coloredStatItemWithLabel:(NSString *)label value:(NSString *)value color:(NSColor *)color {
+    NSString *fullText = [NSString stringWithFormat:@"%@  %@", label, value];
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
+    item.enabled = NO;
+
+    NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:fullText];
+
+    // Label (including arrow) in colored font
+    NSFont *labelFont = [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
+    [attrString addAttribute:NSFontAttributeName value:labelFont range:NSMakeRange(0, label.length)];
+    [attrString addAttribute:NSForegroundColorAttributeName value:color range:NSMakeRange(0, label.length)];
+
+    // Value in monospaced font with same color
+    NSFont *valueFont = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightSemibold];
+    NSRange valueRange = NSMakeRange(label.length, value.length + 2); // +2 for the spaces
+    [attrString addAttribute:NSFontAttributeName value:valueFont range:valueRange];
+    [attrString addAttribute:NSForegroundColorAttributeName value:color range:valueRange];
+
+    item.attributedTitle = attrString;
+    return item;
+}
+
 - (void)updateStatusWithStats:(TrafficStats *)stats selectedDevice:(NetworkDevice *)selectedDevice {
-    NSString *deviceDisplay = (selectedDevice && selectedDevice.name)
-        ? [NSString stringWithFormat:@"[%@] ", selectedDevice.name]
-        : @"";
-    NSString *rateDisplay = [NSString stringWithFormat:@"%@%@/s", deviceDisplay,
-                             [SNBByteFormatter stringFromBytes:stats.bytesPerSecond]];
-    self.statusItem.button.title = rateDisplay;
+    // Create attributed string with colored arrows for incoming/outgoing traffic
+    NSMutableAttributedString *statusDisplay = [[NSMutableAttributedString alloc] init];
+
+    // Add device name if available
+    if (selectedDevice && selectedDevice.name) {
+        NSString *deviceName = [NSString stringWithFormat:@"[%@] ", selectedDevice.name];
+        NSAttributedString *deviceAttr = [[NSAttributedString alloc] initWithString:deviceName];
+        [statusDisplay appendAttributedString:deviceAttr];
+    }
+
+    // Add download arrow in green
+    NSString *downloadArrow = @"↓ ";
+    NSColor *downloadColor = [NSColor colorWithCalibratedRed:0.2 green:0.7 blue:0.3 alpha:1.0];
+    NSAttributedString *downloadAttr = [[NSAttributedString alloc]
+        initWithString:downloadArrow
+        attributes:@{NSForegroundColorAttributeName: downloadColor}];
+    [statusDisplay appendAttributedString:downloadAttr];
+
+    // Add incoming bytes
+    NSString *incomingStr = [SNBByteFormatter stringFromBytes:stats.incomingBytes];
+    NSAttributedString *incomingAttr = [[NSAttributedString alloc] initWithString:incomingStr];
+    [statusDisplay appendAttributedString:incomingAttr];
+
+    // Add separator
+    NSAttributedString *separatorAttr = [[NSAttributedString alloc] initWithString:@"  "];
+    [statusDisplay appendAttributedString:separatorAttr];
+
+    // Add upload arrow in blue
+    NSString *uploadArrow = @"↑ ";
+    NSColor *uploadColor = [NSColor colorWithCalibratedRed:0.2 green:0.5 blue:1.0 alpha:1.0];
+    NSAttributedString *uploadAttr = [[NSAttributedString alloc]
+        initWithString:uploadArrow
+        attributes:@{NSForegroundColorAttributeName: uploadColor}];
+    [statusDisplay appendAttributedString:uploadAttr];
+
+    // Add outgoing bytes
+    NSString *outgoingStr = [SNBByteFormatter stringFromBytes:stats.outgoingBytes];
+    NSAttributedString *outgoingAttr = [[NSAttributedString alloc] initWithString:outgoingStr];
+    [statusDisplay appendAttributedString:outgoingAttr];
+
+    self.statusItem.button.attributedTitle = statusDisplay;
 }
 
 // Helper method to determine if menu needs full rebuild
@@ -201,9 +315,6 @@
     [self.statusMenu removeAllItems];
 
     ConfigurationManager *config = self.configuration;
-    NSMenuItem *titleItem = [self fixedWidthTitleItemWithTitle:@"Network Traffic" width:config.menuFixedWidth];
-    [self.statusMenu addItem:titleItem];
-    [self.statusMenu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc] initWithTitle:@"Settings" action:nil keyEquivalent:@""];
     NSMenu *settingsSubmenu = [[NSMenu alloc] init];
@@ -418,6 +529,7 @@
         [self tearDownMapMenuItem];
     }
 
+    // Traffic Statistics
     NSString *totalBytesStr = [SNBByteFormatter stringFromBytes:stats.totalBytes];
     NSMenuItem *bytesItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Total: %@", totalBytesStr]
                                                        action:nil
@@ -426,21 +538,23 @@
     [visualizationSubmenu addItem:bytesItem];
 
     NSString *incomingStr = [SNBByteFormatter stringFromBytes:stats.incomingBytes];
-    NSString *outgoingStr = [SNBByteFormatter stringFromBytes:stats.outgoingBytes];
-    NSMenuItem *incomingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↓ In: %@", incomingStr]
+    NSMenuItem *incomingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↓ Incoming: %@", incomingStr]
                                                           action:nil
                                                    keyEquivalent:@""];
     incomingItem.enabled = NO;
     [visualizationSubmenu addItem:incomingItem];
 
-    NSMenuItem *outgoingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↑ Out: %@", outgoingStr]
+    NSString *outgoingStr = [SNBByteFormatter stringFromBytes:stats.outgoingBytes];
+    NSMenuItem *outgoingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↑ Outgoing: %@", outgoingStr]
                                                           action:nil
                                                    keyEquivalent:@""];
     outgoingItem.enabled = NO;
     [visualizationSubmenu addItem:outgoingItem];
     [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem *packetsItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Packets: %llu", stats.totalPackets]
+    // Packets count
+    NSString *packetsStr = [NSString stringWithFormat:@"%llu", stats.totalPackets];
+    NSMenuItem *packetsItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Packets: %@", packetsStr]
                                                          action:nil
                                                   keyEquivalent:@""];
     packetsItem.enabled = NO;
@@ -448,7 +562,7 @@
 
     if (self.showTopHosts && stats.topHosts.count > 0) {
         [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *hostsTitle = [[NSMenuItem alloc] initWithTitle:@"Top Hosts" action:nil keyEquivalent:@""];
+        NSMenuItem *hostsTitle = [[NSMenuItem alloc] initWithTitle:@"TOP HOSTS" action:nil keyEquivalent:@""];
         hostsTitle.enabled = NO;
         [visualizationSubmenu addItem:hostsTitle];
 
@@ -457,9 +571,10 @@
             HostTraffic *host = stats.topHosts[i];
             NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
             NSString *hostDisplay = hostName.length > 0 ? [NSString stringWithFormat:@"%@ (%@)", hostName, host.address] : host.address;
-            NSString *hostItemStr = [NSString stringWithFormat:@"  %@ - %@",
-                                     hostDisplay, [SNBByteFormatter stringFromBytes:host.bytes]];
-            NSMenuItem *hostItem = [[NSMenuItem alloc] initWithTitle:hostItemStr action:nil keyEquivalent:@""];
+            NSString *bytesStr = [SNBByteFormatter stringFromBytes:host.bytes];
+
+            NSString *fullText = [NSString stringWithFormat:@"  %@ - %@", hostDisplay, bytesStr];
+            NSMenuItem *hostItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
             hostItem.enabled = NO;
             [visualizationSubmenu addItem:hostItem];
         }
@@ -467,18 +582,20 @@
 
     if (self.showTopConnections && stats.topConnections.count > 0) {
         [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *connectionsTitle = [[NSMenuItem alloc] initWithTitle:@"Top Connections" action:nil keyEquivalent:@""];
+        NSMenuItem *connectionsTitle = [[NSMenuItem alloc] initWithTitle:@"TOP CONNECTIONS" action:nil keyEquivalent:@""];
         connectionsTitle.enabled = NO;
         [visualizationSubmenu addItem:connectionsTitle];
 
         NSInteger count = MIN(config.maxTopConnectionsToShow, stats.topConnections.count);
         for (NSInteger i = 0; i < count; i++) {
             ConnectionTraffic *connection = stats.topConnections[i];
-            NSString *connectionItemStr = [NSString stringWithFormat:@"  %@ - %@  %@",
-                                           connection.sourceAddress,
-                                           connection.destinationAddress,
-                                           [SNBByteFormatter stringFromBytes:connection.bytes]];
-            NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:connectionItemStr action:nil keyEquivalent:@""];
+            NSString *bytesStr = [SNBByteFormatter stringFromBytes:connection.bytes];
+
+            NSString *fullText = [NSString stringWithFormat:@"  %@ → %@ - %@",
+                                 connection.sourceAddress,
+                                 connection.destinationAddress,
+                                 bytesStr];
+            NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
             connectionItem.enabled = NO;
             [visualizationSubmenu addItem:connectionItem];
         }
@@ -486,7 +603,7 @@
 
     if (threatIntelEnabled && threatIntelResults.count > 0) {
         [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"Threat Intelligence" action:nil keyEquivalent:@""];
+        NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"THREAT INTELLIGENCE" action:nil keyEquivalent:@""];
         threatTitle.enabled = NO;
         [visualizationSubmenu addItem:threatTitle];
 
@@ -495,28 +612,24 @@
             if (response.scoringResult) {
                 TIScoringResult *scoring = response.scoringResult;
                 NSString *verdictStr = [scoring verdictString];
-                NSColor *color = [scoring verdictColor];
 
-                NSString *displayStr = [NSString stringWithFormat:@"  %@: %@ (Score: %ld)",
+                NSString *displayStr = [NSString stringWithFormat:@"  %@ - %@ (%ld)",
                                         ip, verdictStr, (long)scoring.finalScore];
 
                 NSMenuItem *threatItem = [[NSMenuItem alloc] initWithTitle:displayStr
                                                                    action:nil
                                                             keyEquivalent:@""];
                 threatItem.enabled = NO;
-
-                NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:displayStr];
-                [attrString addAttribute:NSForegroundColorAttributeName
-                                   value:color
-                                   range:NSMakeRange(0, displayStr.length)];
-                threatItem.attributedTitle = attrString;
                 [visualizationSubmenu addItem:threatItem];
             }
         }
 
         if (cacheStats) {
-            NSString *statsStr = [NSString stringWithFormat:@"  Cache: %@ entries (%.1f%% hit rate)",
-                                  cacheStats[@"size"], [cacheStats[@"hitRate"] doubleValue] * 100];
+            [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+            NSString *sizeStr = [NSString stringWithFormat:@"%@", cacheStats[@"size"]];
+            NSString *hitRateStr = [NSString stringWithFormat:@"%.1f%%", [cacheStats[@"hitRate"] doubleValue] * 100];
+            NSString *statsStr = [NSString stringWithFormat:@"Cache: %@ entries - %@ hit rate", sizeStr, hitRateStr];
+
             NSMenuItem *statsItem = [[NSMenuItem alloc] initWithTitle:statsStr action:nil keyEquivalent:@""];
             statsItem.enabled = NO;
             [visualizationSubmenu addItem:statsItem];
