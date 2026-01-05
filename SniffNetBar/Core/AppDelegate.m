@@ -9,12 +9,16 @@
 #import "AppCoordinator.h"
 #import "ConfigurationManager.h"
 #import "AuthorizationHelper.h"
+#import "KeychainManager.h"
 #import "Logger.h"
 
 @implementation AppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    SNBLogInfo("=== applicationDidFinishLaunching START ===");
+
     if (self.authorizationChecked) {
+        SNBLogInfo("Authorization already checked, proceeding to initialize");
         [self initializeApplication];
         return;
     }
@@ -22,7 +26,7 @@
     self.authorizationChecked = YES;
 
     if (![AuthorizationHelper isRunningAsRoot]) {
-        SNBLogInfo("Not running as root, requesting authorization");
+        SNBLogInfo("Not running as root, requesting ROOT authorization");
 
         BOOL success = [AuthorizationHelper relaunchAsRoot];
         if (!success) {
@@ -42,6 +46,12 @@
 }
 
 - (void)initializeApplication {
+    SNBLogInfo("Initializing application");
+
+    // Enable keychain access now that we have root privileges
+    NSError *error = nil;
+    [KeychainManager requestKeychainAccessWithError:&error];
+
     // Create status item
     NSStatusBar *statusBar = [NSStatusBar systemStatusBar];
     self.statusItem = [statusBar statusItemWithLength:NSVariableStatusItemLength];

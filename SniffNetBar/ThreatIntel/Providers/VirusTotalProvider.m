@@ -87,9 +87,11 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
     self.timeout = timeout;
     self.maxRequestsPerMin = maxRequestsPerMin;
 
-    NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
+    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
     config.timeoutIntervalForRequest = timeout;
     config.timeoutIntervalForResource = timeout * 2;
+    config.URLCache = nil;
+    config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
     self.session = [NSURLSession sessionWithConfiguration:config];
 
     SNBLogThreatIntelInfo("Configured with API key (rate limit: %ld req/min, URL: %{public}@)",

@@ -17,6 +17,59 @@
 
 @implementation SNBAnomalyStore
 
+#pragma mark - Transaction Helpers
+
+- (BOOL)beginWriteTransactionWithSavepoint:(NSString * _Nullable * _Nullable)savepointName {
+    if (!self.db) {
+        return NO;
+    }
+
+    if (sqlite3_get_autocommit(self.db) == 0) {
+        NSString *name = [NSString stringWithFormat:@"snb_%u", arc4random()];
+        NSString *sql = [NSString stringWithFormat:@"SAVEPOINT %@;", name];
+        int status = sqlite3_exec(self.db, sql.UTF8String, NULL, NULL, NULL);
+        if (status == SQLITE_OK) {
+            if (savepointName) {
+                *savepointName = name;
+            }
+            return YES;
+        }
+        NSLog(@"Failed to create savepoint: %s (code %d)", sqlite3_errmsg(self.db), status);
+        return NO;
+    }
+
+    int status = sqlite3_exec(self.db, "BEGIN IMMEDIATE;", NULL, NULL, NULL);
+    if (status != SQLITE_OK) {
+        NSLog(@"Failed to begin transaction: %s (code %d)", sqlite3_errmsg(self.db), status);
+        return NO;
+    }
+    if (savepointName) {
+        *savepointName = nil;
+    }
+    return YES;
+}
+
+- (void)endWriteTransactionWithSavepoint:(NSString * _Nullable)savepointName success:(BOOL)success {
+    if (!self.db) {
+        return;
+    }
+
+    if (savepointName.length > 0) {
+        if (success) {
+            NSString *sql = [NSString stringWithFormat:@"RELEASE SAVEPOINT %@;", savepointName];
+            sqlite3_exec(self.db, sql.UTF8String, NULL, NULL, NULL);
+        } else {
+            NSString *rollback = [NSString stringWithFormat:@"ROLLBACK TO SAVEPOINT %@;", savepointName];
+            sqlite3_exec(self.db, rollback.UTF8String, NULL, NULL, NULL);
+            NSString *release = [NSString stringWithFormat:@"RELEASE SAVEPOINT %@;", savepointName];
+            sqlite3_exec(self.db, release.UTF8String, NULL, NULL, NULL);
+        }
+        return;
+    }
+
+    sqlite3_exec(self.db, success ? "COMMIT;" : "ROLLBACK;", NULL, NULL, NULL);
+}
+
 + (NSString *)applicationSupportDirectory {
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
                                                                      NSUserDomainMask,
@@ -193,7 +246,11 @@
         return;
     }
 
-    sqlite3_exec(self.db, "BEGIN;", NULL, NULL, NULL);
+    NSString *savepointName = nil;
+    if (![self beginWriteTransactionWithSavepoint:&savepointName]) {
+        return;
+    }
+    BOOL success = YES;
 
     sqlite3_stmt *stmt = NULL;
     const char *insertWindow =
@@ -220,7 +277,11 @@
         sqlite3_bind_int(stmt, 14, isRareDst ? 1 : 0);
         sqlite3_bind_double(stmt, 15, score);
         sqlite3_bind_int64(stmt, 16, (sqlite3_int64)[[NSDate date] timeIntervalSince1970]);
-        sqlite3_step(stmt);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            success = NO;
+        }
+    } else {
+        success = NO;
     }
     sqlite3_finalize(stmt);
 
@@ -236,11 +297,15 @@
         sqlite3_bind_text(stmt, 1, ipAddress.UTF8String, -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 2, (sqlite3_int64)[[NSDate date] timeIntervalSince1970]);
         sqlite3_bind_double(stmt, 3, score);
-        sqlite3_step(stmt);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            success = NO;
+        }
+    } else {
+        success = NO;
     }
     sqlite3_finalize(stmt);
 
-    sqlite3_exec(self.db, "COMMIT;", NULL, NULL, NULL);
+    [self endWriteTransactionWithSavepoint:savepointName success:success];
 }
 
 - (NSArray<SNBAnomalyWindowRecord *> *)windowsNeedingExplanationWithMinimumScore:(double)minimumScore
@@ -302,7 +367,12 @@
         }
     }
 
-    sqlite3_exec(self.db, "BEGIN;", NULL, NULL, NULL);
+    NSString *savepointName = nil;
+    if (![self beginWriteTransactionWithSavepoint:&savepointName]) {
+        return;
+    }
+    BOOL success = YES;
+
     sqlite3_stmt *stmt = NULL;
     const char *sql =
         "INSERT OR REPLACE INTO anomaly_explanations ("
@@ -317,10 +387,14 @@
         sqlite3_bind_text(stmt, 5, tagsJSON.UTF8String, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 6, promptVersion.UTF8String, -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 7, (sqlite3_int64)[[NSDate date] timeIntervalSince1970]);
-        sqlite3_step(stmt);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            success = NO;
+        }
+    } else {
+        success = NO;
     }
     sqlite3_finalize(stmt);
-    sqlite3_exec(self.db, "COMMIT;", NULL, NULL, NULL);
+    [self endWriteTransactionWithSavepoint:savepointName success:success];
 }
 
 @end

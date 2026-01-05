@@ -26,9 +26,12 @@
 @property (nonatomic, assign) uint64_t lastBytesPerSecond;
 @property (nonatomic, assign) NSUInteger lastTopHostsCount;
 @property (nonatomic, assign) NSUInteger lastTopConnectionsCount;
+@property (nonatomic, assign) CFAbsoluteTime lastVisualizationRefreshTime;
 @end
 
 @implementation MenuBuilder
+
+static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
 
 - (instancetype)initWithMenu:(NSMenu *)menu
                   statusItem:(NSStatusItem *)statusItem
@@ -137,6 +140,68 @@
         connections = [connections subarrayWithRange:NSMakeRange(0, 10)];
     }
     return connections;
+}
+
+#pragma mark - Threat Sorting Helpers
+
+- (NSInteger)severityRankForVerdict:(TIThreatVerdict)verdict {
+    switch (verdict) {
+        case TIThreatVerdictMalicious:
+            return 3;
+        case TIThreatVerdictSuspicious:
+            return 2;
+        case TIThreatVerdictUnknown:
+            return 1;
+        case TIThreatVerdictClean:
+            return 0;
+    }
+}
+
+- (NSArray<NSString *> *)sortedThreatIPsFromResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)results {
+    NSArray<NSString *> *ips = [results allKeys];
+    return [ips sortedArrayUsingComparator:^NSComparisonResult(NSString *ip1, NSString *ip2) {
+        TIScoringResult *score1 = results[ip1].scoringResult;
+        TIScoringResult *score2 = results[ip2].scoringResult;
+        NSInteger rank1 = score1 ? [self severityRankForVerdict:score1.verdict] : -1;
+        NSInteger rank2 = score2 ? [self severityRankForVerdict:score2.verdict] : -1;
+        if (rank1 != rank2) {
+            return rank1 > rank2 ? NSOrderedAscending : NSOrderedDescending;
+        }
+        NSInteger scoreValue1 = score1 ? score1.finalScore : 0;
+        NSInteger scoreValue2 = score2 ? score2.finalScore : 0;
+        if (scoreValue1 != scoreValue2) {
+            return scoreValue1 > scoreValue2 ? NSOrderedAscending : NSOrderedDescending;
+        }
+        return [ip1 compare:ip2];
+    }];
+}
+
+- (NSString *)severityBadgeForVerdict:(TIThreatVerdict)verdict {
+    switch (verdict) {
+        case TIThreatVerdictMalicious:
+            return @"[HIGH]";
+        case TIThreatVerdictSuspicious:
+            return @"[MED]";
+        case TIThreatVerdictUnknown:
+            return @"[LOW]";
+        case TIThreatVerdictClean:
+            return @"[OK]";
+    }
+}
+
+- (NSMenuItem *)threatBadgeItemWithIP:(NSString *)ip scoring:(TIScoringResult *)scoring {
+    NSString *badge = [self severityBadgeForVerdict:scoring.verdict];
+    NSString *title = [NSString stringWithFormat:@"%@ %@ (%ld)", badge, ip, (long)scoring.finalScore];
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+    item.enabled = NO;
+
+    NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:title];
+    NSFont *font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold];
+    [attrString addAttribute:NSFontAttributeName value:font range:NSMakeRange(0, title.length)];
+    [attrString addAttribute:NSForegroundColorAttributeName value:[scoring verdictColor] range:NSMakeRange(0, title.length)];
+    item.attributedTitle = attrString;
+
+    return item;
 }
 
 #pragma mark - Styled Menu Item Helpers
@@ -469,15 +534,22 @@
         return;
     }
 
+    // Avoid rebuilding live menus to prevent blinking and keep interactive views usable.
+    if (self.showMap && self.mapMenuView) {
+        [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];
+    }
+
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - self.lastVisualizationRefreshTime < kVisualizationRefreshIntervalSeconds) {
+        return;
+    }
+    self.lastVisualizationRefreshTime = now;
+
     [self rebuildVisualizationMenuWithStats:stats
                         threatIntelEnabled:threatIntelEnabled
                        threatIntelResults:threatIntelResults
                                 cacheStats:cacheStats];
     [self truncateMenuItemsInMenu:self.visualizationSubmenu maxWidth:self.configuration.menuFixedWidth];
-
-    if (self.showMap && self.mapMenuView) {
-        [self.mapMenuView updateWithConnections:[self connectionsForMapFromStats:stats]];
-    }
 }
 
 - (void)menuDidClose {
@@ -516,55 +588,140 @@
     [visualizationSubmenu removeAllItems];
     ConfigurationManager *config = self.configuration;
 
+    NSMenu *detailsSubmenu = [[NSMenu alloc] init];
+    NSMenuItem *detailsItem = [[NSMenuItem alloc] initWithTitle:@"Details" action:nil keyEquivalent:@""];
+    detailsItem.submenu = detailsSubmenu;
+
+    // Risk Overview
+    [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"RISK OVERVIEW" style:@"header"]];
+
+    if (!threatIntelEnabled) {
+        NSMenuItem *disabledItem = [[NSMenuItem alloc] initWithTitle:@"Threat Intel: Off (enable in Settings)"
+                                                             action:nil
+                                                      keyEquivalent:@""];
+        disabledItem.enabled = NO;
+        [visualizationSubmenu addItem:disabledItem];
+    } else if (threatIntelResults == nil || threatIntelResults.count == 0) {
+        NSMenuItem *emptyItem = [[NSMenuItem alloc] initWithTitle:@"No threat data available yet"
+                                                          action:nil
+                                                   keyEquivalent:@""];
+        emptyItem.enabled = NO;
+        [visualizationSubmenu addItem:emptyItem];
+    } else {
+        NSArray<NSString *> *sortedIPs = [self sortedThreatIPsFromResults:threatIntelResults];
+        NSUInteger totalCount = 0;
+        NSUInteger flaggedCount = 0;
+        NSInteger worstRank = -1;
+
+        for (NSString *ip in sortedIPs) {
+            TIScoringResult *scoring = threatIntelResults[ip].scoringResult;
+            if (!scoring) {
+                continue;
+            }
+            totalCount += 1;
+            NSInteger rank = [self severityRankForVerdict:scoring.verdict];
+            if (rank > 0) {
+                flaggedCount += 1;
+            }
+            if (rank > worstRank) {
+                worstRank = rank;
+            }
+        }
+
+        NSString *summaryValue = [NSString stringWithFormat:@"%lu / %lu", (unsigned long)flaggedCount, (unsigned long)totalCount];
+        [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Flagged" value:summaryValue color:[NSColor labelColor]]];
+
+        [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"Top Threats" style:@"subheader"]];
+        NSUInteger topLimit = MIN(3, sortedIPs.count);
+        NSUInteger shown = 0;
+        for (NSString *ip in sortedIPs) {
+            TIScoringResult *scoring = threatIntelResults[ip].scoringResult;
+            if (!scoring) {
+                continue;
+            }
+            if (scoring.verdict == TIThreatVerdictClean) {
+                continue;
+            }
+            [visualizationSubmenu addItem:[self threatBadgeItemWithIP:ip scoring:scoring]];
+            shown += 1;
+            if (shown >= topLimit) {
+                break;
+            }
+        }
+
+        if (shown == 0) {
+            NSMenuItem *cleanItem = [[NSMenuItem alloc] initWithTitle:@"No active threats detected"
+                                                              action:nil
+                                                       keyEquivalent:@""];
+            cleanItem.enabled = NO;
+            [visualizationSubmenu addItem:cleanItem];
+        }
+    }
+
+    [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+
+    // Network Snapshot
+    [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"NETWORK SNAPSHOT" style:@"header"]];
+    NSString *rateStr = [SNBByteFormatter stringFromBytes:stats.bytesPerSecond];
+    [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Rate" value:[NSString stringWithFormat:@"%@/s", rateStr]
+                                                         color:[NSColor labelColor]]];
+    NSString *totalBytesStr = [SNBByteFormatter stringFromBytes:stats.totalBytes];
+    [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Total" value:totalBytesStr color:[NSColor labelColor]]];
+    NSString *countsStr = [NSString stringWithFormat:@"%lu / %lu",
+                           (unsigned long)stats.topHosts.count,
+                           (unsigned long)stats.topConnections.count];
+    [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Hosts/Conns" value:countsStr
+                                                         color:[NSColor secondaryLabelColor]]];
+
+    [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+    [visualizationSubmenu addItem:detailsItem];
+
+    // Details submenu content
     if (self.showMap && self.menuIsOpen) {
-        if (self.mapMenuItem.menu && self.mapMenuItem.menu != visualizationSubmenu) {
+        if (self.mapMenuItem.menu && self.mapMenuItem.menu != detailsSubmenu) {
             [self.mapMenuItem.menu removeItem:self.mapMenuItem];
         }
         NSMenuItem *mapItem = [self mapMenuItemIfNeeded];
         if (mapItem) {
-            [visualizationSubmenu addItem:mapItem];
-            [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+            [detailsSubmenu addItem:mapItem];
+            [detailsSubmenu addItem:[NSMenuItem separatorItem]];
         }
     } else {
         [self tearDownMapMenuItem];
     }
-
-    // Traffic Statistics
-    NSString *totalBytesStr = [SNBByteFormatter stringFromBytes:stats.totalBytes];
-    NSMenuItem *bytesItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Total: %@", totalBytesStr]
-                                                       action:nil
-                                                keyEquivalent:@""];
-    bytesItem.enabled = NO;
-    [visualizationSubmenu addItem:bytesItem];
 
     NSString *incomingStr = [SNBByteFormatter stringFromBytes:stats.incomingBytes];
     NSMenuItem *incomingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↓ Incoming: %@", incomingStr]
                                                           action:nil
                                                    keyEquivalent:@""];
     incomingItem.enabled = NO;
-    [visualizationSubmenu addItem:incomingItem];
+    [detailsSubmenu addItem:incomingItem];
 
     NSString *outgoingStr = [SNBByteFormatter stringFromBytes:stats.outgoingBytes];
     NSMenuItem *outgoingItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"↑ Outgoing: %@", outgoingStr]
                                                           action:nil
                                                    keyEquivalent:@""];
     outgoingItem.enabled = NO;
-    [visualizationSubmenu addItem:outgoingItem];
-    [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+    [detailsSubmenu addItem:outgoingItem];
 
-    // Packets count
+    NSMenuItem *bytesItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Total: %@", totalBytesStr]
+                                                       action:nil
+                                                keyEquivalent:@""];
+    bytesItem.enabled = NO;
+    [detailsSubmenu addItem:bytesItem];
+
     NSString *packetsStr = [NSString stringWithFormat:@"%llu", stats.totalPackets];
     NSMenuItem *packetsItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Packets: %@", packetsStr]
                                                          action:nil
                                                   keyEquivalent:@""];
     packetsItem.enabled = NO;
-    [visualizationSubmenu addItem:packetsItem];
+    [detailsSubmenu addItem:packetsItem];
 
     if (self.showTopHosts && stats.topHosts.count > 0) {
-        [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+        [detailsSubmenu addItem:[NSMenuItem separatorItem]];
         NSMenuItem *hostsTitle = [[NSMenuItem alloc] initWithTitle:@"TOP HOSTS" action:nil keyEquivalent:@""];
         hostsTitle.enabled = NO;
-        [visualizationSubmenu addItem:hostsTitle];
+        [detailsSubmenu addItem:hostsTitle];
 
         NSInteger count = MIN(config.maxTopHostsToShow, stats.topHosts.count);
         for (NSInteger i = 0; i < count; i++) {
@@ -576,22 +733,21 @@
             NSString *fullText = [NSString stringWithFormat:@"  %@ - %@", hostDisplay, bytesStr];
             NSMenuItem *hostItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
             hostItem.enabled = NO;
-            [visualizationSubmenu addItem:hostItem];
+            [detailsSubmenu addItem:hostItem];
         }
     }
 
     if (self.showTopConnections && stats.topConnections.count > 0) {
-        [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+        [detailsSubmenu addItem:[NSMenuItem separatorItem]];
         NSMenuItem *connectionsTitle = [[NSMenuItem alloc] initWithTitle:@"TOP CONNECTIONS" action:nil keyEquivalent:@""];
         connectionsTitle.enabled = NO;
-        [visualizationSubmenu addItem:connectionsTitle];
+        [detailsSubmenu addItem:connectionsTitle];
 
         NSInteger count = MIN(config.maxTopConnectionsToShow, stats.topConnections.count);
         for (NSInteger i = 0; i < count; i++) {
             ConnectionTraffic *connection = stats.topConnections[i];
             NSString *bytesStr = [SNBByteFormatter stringFromBytes:connection.bytes];
 
-            // Format connection
             NSString *fullText = [NSString stringWithFormat:@"  %@:%ld → %@:%ld - %@",
                        connection.sourceAddress,
                        (long)connection.sourcePort,
@@ -601,17 +757,18 @@
 
             NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
             connectionItem.enabled = NO;
-            [visualizationSubmenu addItem:connectionItem];
+            [detailsSubmenu addItem:connectionItem];
         }
     }
 
     if (threatIntelEnabled && threatIntelResults.count > 0) {
-        [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+        [detailsSubmenu addItem:[NSMenuItem separatorItem]];
         NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"THREAT INTELLIGENCE" action:nil keyEquivalent:@""];
         threatTitle.enabled = NO;
-        [visualizationSubmenu addItem:threatTitle];
+        [detailsSubmenu addItem:threatTitle];
 
-        for (NSString *ip in [threatIntelResults allKeys]) {
+        NSArray<NSString *> *sortedIPs = [self sortedThreatIPsFromResults:threatIntelResults];
+        for (NSString *ip in sortedIPs) {
             TIEnrichmentResponse *response = threatIntelResults[ip];
             if (response.scoringResult) {
                 TIScoringResult *scoring = response.scoringResult;
@@ -624,19 +781,19 @@
                                                                    action:nil
                                                             keyEquivalent:@""];
                 threatItem.enabled = NO;
-                [visualizationSubmenu addItem:threatItem];
+                [detailsSubmenu addItem:threatItem];
             }
         }
 
         if (cacheStats) {
-            [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+            [detailsSubmenu addItem:[NSMenuItem separatorItem]];
             NSString *sizeStr = [NSString stringWithFormat:@"%@", cacheStats[@"size"]];
             NSString *hitRateStr = [NSString stringWithFormat:@"%.1f%%", [cacheStats[@"hitRate"] doubleValue] * 100];
             NSString *statsStr = [NSString stringWithFormat:@"Cache: %@ entries - %@ hit rate", sizeStr, hitRateStr];
 
             NSMenuItem *statsItem = [[NSMenuItem alloc] initWithTitle:statsStr action:nil keyEquivalent:@""];
             statsItem.enabled = NO;
-            [visualizationSubmenu addItem:statsItem];
+            [detailsSubmenu addItem:statsItem];
         }
     }
 }

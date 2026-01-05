@@ -92,9 +92,11 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
     self.timeout = timeout;
     self.maxRequestsPerMin = maxRequestsPerMin;
 
-    NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
+    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
     config.timeoutIntervalForRequest = timeout;
     config.timeoutIntervalForResource = timeout * 2;
+    config.URLCache = nil;
+    config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
     self.session = [NSURLSession sessionWithConfiguration:config];
 
     SNBLogThreatIntelInfo("Configured with API key (rate limit: %ld req/min, maxAge: %ld days, URL: %{public}@)",

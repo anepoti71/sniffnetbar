@@ -52,6 +52,21 @@ NS_ASSUME_NONNULL_BEGIN
  */
 + (BOOL)hasAPIKeyForIdentifier:(NSString *)identifier;
 
+/**
+ * Preload API keys from the keychain to trigger a single permission prompt.
+ * @param error Output parameter for error information
+ * @return YES if the cache was loaded, NO if an error occurred
+ */
++ (BOOL)preloadAPIKeysWithError:(NSError *_Nullable *_Nullable)error;
+
+/**
+ * Request keychain access permission by attempting a keychain operation.
+ * This triggers the system keychain access prompt on first launch.
+ * @param error Output parameter for error information
+ * @return YES if access was granted or already available, NO if denied
+ */
++ (BOOL)requestKeychainAccessWithError:(NSError *_Nullable *_Nullable)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

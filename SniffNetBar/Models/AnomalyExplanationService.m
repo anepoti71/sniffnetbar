@@ -42,7 +42,10 @@ static const double SNBExplainMediumScore = 0.90;
         _timeout = configuration.explainabilityOllamaTimeout;
         _enabled = configuration.explainabilityEnabled && _baseURL.length > 0 && _model.length > 0;
         _promptVersion = SNBExplainabilityPromptVersion;
-        _session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
+        NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        config.URLCache = nil;
+        config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        _session = [NSURLSession sessionWithConfiguration:config];
     }
     return self;
 }

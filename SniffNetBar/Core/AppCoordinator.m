@@ -18,6 +18,7 @@
 #import "AnomalyDetector.h"
 #import "AnomalyStore.h"
 #import "AnomalyExplainabilityCoordinator.h"
+#import "KeychainManager.h"
 
 @interface AppCoordinator ()
 @property (nonatomic, strong, readwrite) TrafficStatistics *statistics;

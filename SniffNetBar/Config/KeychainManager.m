@@ -14,6 +14,11 @@ static NSString * const kKeychainServiceName = @"com.sniffnetbar.api-keys";
 // Error domain for KeychainManager errors
 static NSString * const kKeychainManagerErrorDomain = @"com.sniffnetbar.keychain";
 
+// In-memory cache to avoid repeated keychain prompts.
+static NSMutableDictionary<NSString *, NSString *> *s_cachedAPIKeys = nil;
+static BOOL s_cacheLoaded = NO;
+static BOOL s_keychainAccessEnabled = NO;
+
 // Error codes
 typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
     KeychainManagerErrorItemNotFound = 1001,
@@ -23,6 +28,27 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
 };
 
 @implementation KeychainManager
+
+#pragma mark - Cache Helpers
+
++ (NSMutableDictionary<NSString *, NSString *> *)loadAPIKeyCacheWithError:(NSError *_Nullable *_Nullable)error {
+    // Don't actually load anything - let individual key accesses handle their own queries
+    // This prevents multiple prompts
+    @synchronized(self) {
+        if (!s_cachedAPIKeys) {
+            s_cachedAPIKeys = [[NSMutableDictionary alloc] init];
+        }
+        s_cacheLoaded = YES;
+        return s_cachedAPIKeys;
+    }
+}
+
+- (void)invalidateCache {
+    @synchronized([self class]) {
+        s_cachedAPIKeys = nil;
+        s_cacheLoaded = NO;
+    }
+}
 
 #pragma mark - Public Methods
 
@@ -43,13 +69,21 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
         return [self deleteAPIKeyForIdentifier:identifier error:error];
     }
 
-    // Check if item already exists
-    BOOL exists = [self hasAPIKeyForIdentifier:identifier];
-
     NSData *passwordData = [apiKey dataUsingEncoding:NSUTF8StringEncoding];
 
-    if (exists) {
-        // Update existing item
+    // Try to add new item first
+    NSDictionary *attributes = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: kKeychainServiceName,
+        (__bridge id)kSecAttrAccount: identifier,
+        (__bridge id)kSecValueData: passwordData,
+        (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlock
+    };
+
+    OSStatus status = SecItemAdd((__bridge CFDictionaryRef)attributes, NULL);
+
+    if (status == errSecDuplicateItem) {
+        // Item exists, update it instead
         NSDictionary *query = @{
             (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
             (__bridge id)kSecAttrService: kKeychainServiceName,
@@ -60,33 +94,24 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
             (__bridge id)kSecValueData: passwordData
         };
 
-        OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query,
-                                       (__bridge CFDictionaryRef)attributesToUpdate);
+        status = SecItemUpdate((__bridge CFDictionaryRef)query,
+                              (__bridge CFDictionaryRef)attributesToUpdate);
+    }
 
-        if (status != errSecSuccess) {
-            if (error) {
-                *error = [self errorFromOSStatus:status];
-            }
-            return NO;
+    if (status != errSecSuccess) {
+        if (error) {
+            *error = [self errorFromOSStatus:status];
         }
-    } else {
-        // Add new item
-        NSDictionary *attributes = @{
-            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-            (__bridge id)kSecAttrService: kKeychainServiceName,
-            (__bridge id)kSecAttrAccount: identifier,
-            (__bridge id)kSecValueData: passwordData,
-            (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleWhenUnlocked
-        };
+        return NO;
+    }
 
-        OSStatus status = SecItemAdd((__bridge CFDictionaryRef)attributes, NULL);
-
-        if (status != errSecSuccess) {
-            if (error) {
-                *error = [self errorFromOSStatus:status];
-            }
-            return NO;
+    // Update cache
+    @synchronized(self) {
+        if (!s_cachedAPIKeys) {
+            s_cachedAPIKeys = [[NSMutableDictionary alloc] init];
         }
+        s_cachedAPIKeys[identifier] = apiKey;
+        s_cacheLoaded = YES;
     }
 
     return YES;
@@ -94,6 +119,16 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
 
 + (nullable NSString *)getAPIKeyForIdentifier:(NSString *)identifier
                                         error:(NSError *_Nullable *_Nullable)error {
+
+    NSLog(@"[KEYCHAIN] getAPIKeyForIdentifier called for: %@", identifier);
+
+    // Block keychain access until explicitly enabled (after root privileges obtained)
+    @synchronized(self) {
+        if (!s_keychainAccessEnabled) {
+            NSLog(@"[KEYCHAIN] Access blocked - not yet enabled (waiting for root privileges)");
+            return nil;
+        }
+    }
 
     if (!identifier || identifier.length == 0) {
         if (error) {
@@ -103,29 +138,50 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
         return nil;
     }
 
+    // Check cache first
+    @synchronized(self) {
+        if (s_cacheLoaded && s_cachedAPIKeys && s_cachedAPIKeys[identifier]) {
+            NSLog(@"[KEYCHAIN] Returning cached value for: %@", identifier);
+            return s_cachedAPIKeys[identifier];
+        }
+    }
+
+    // Query keychain directly
     NSDictionary *query = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
         (__bridge id)kSecAttrService: kKeychainServiceName,
         (__bridge id)kSecAttrAccount: identifier,
-        (__bridge id)kSecReturnData: @YES,
-        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne
+        (__bridge id)kSecReturnData: @YES
     };
 
     CFTypeRef result = NULL;
     OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
 
-    if (status == errSecSuccess && result) {
-        NSData *passwordData = (__bridge_transfer NSData *)result;
-        NSString *password = [[NSString alloc] initWithData:passwordData
-                                                   encoding:NSUTF8StringEncoding];
-        return password;
+    if (status == errSecItemNotFound) {
+        return nil;
     }
 
-    if (status != errSecItemNotFound && error) {
-        *error = [self errorFromOSStatus:status];
+    if (status != errSecSuccess) {
+        if (error) {
+            *error = [self errorFromOSStatus:status];
+        }
+        return nil;
     }
 
-    return nil;
+    NSData *passwordData = (__bridge_transfer NSData *)result;
+    NSString *apiKey = [[NSString alloc] initWithData:passwordData encoding:NSUTF8StringEncoding];
+
+    // Update cache
+    @synchronized(self) {
+        if (!s_cachedAPIKeys) {
+            s_cachedAPIKeys = [[NSMutableDictionary alloc] init];
+        }
+        if (apiKey) {
+            s_cachedAPIKeys[identifier] = apiKey;
+        }
+    }
+
+    return apiKey;
 }
 
 + (BOOL)deleteAPIKeyForIdentifier:(NSString *)identifier
@@ -139,6 +195,11 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
         return NO;
     }
 
+    NSMutableDictionary<NSString *, NSString *> *cache = [self loadAPIKeyCacheWithError:error];
+    if (!cache) {
+        return NO;
+    }
+
     NSDictionary *query = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
         (__bridge id)kSecAttrService: kKeychainServiceName,
@@ -149,6 +210,7 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
 
     // Consider errSecItemNotFound as success (item doesn't exist = successfully deleted)
     if (status == errSecSuccess || status == errSecItemNotFound) {
+        [cache removeObjectForKey:identifier];
         return YES;
     }
 
@@ -164,17 +226,30 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
         return NO;
     }
 
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: kKeychainServiceName,
-        (__bridge id)kSecAttrAccount: identifier,
-        (__bridge id)kSecReturnData: @NO,
-        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne
-    };
+    NSError *error = nil;
+    NSMutableDictionary<NSString *, NSString *> *cache = [self loadAPIKeyCacheWithError:&error];
+    if (!cache) {
+        return NO;
+    }
 
-    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, NULL);
+    return (cache[identifier] != nil);
+}
 
-    return status == errSecSuccess;
++ (BOOL)preloadAPIKeysWithError:(NSError *_Nullable *_Nullable)error {
+    NSMutableDictionary<NSString *, NSString *> *cache = [self loadAPIKeyCacheWithError:error];
+    return cache != nil;
+}
+
++ (BOOL)requestKeychainAccessWithError:(NSError *_Nullable *_Nullable)error {
+    NSLog(@"[KEYCHAIN] Enabling keychain access");
+
+    // Enable keychain access globally
+    @synchronized(self) {
+        s_keychainAccessEnabled = YES;
+    }
+
+    // Success - keychain is now accessible
+    return YES;
 }
 
 #pragma mark - Error Handling

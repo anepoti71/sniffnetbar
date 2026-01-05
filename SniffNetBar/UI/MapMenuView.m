@@ -65,7 +65,10 @@
                                                 expirationInterval:[ConfigurationManager sharedManager].locationCacheExpirationTime];
         _inFlightLookups = [NSMutableSet set];
         _failedLookups = [NSMutableSet set];
-        _session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
+        NSURLSessionConfiguration *sessionConfig = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        sessionConfig.URLCache = nil;
+        sessionConfig.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        _session = [NSURLSession sessionWithConfiguration:sessionConfig];
         _renderQueue = dispatch_queue_create("com.sniffnetbar.map.render", DISPATCH_QUEUE_SERIAL);
         _geoLocationSemaphore = dispatch_semaphore_create(5); // Limit to 5 concurrent geolocation requests
 
