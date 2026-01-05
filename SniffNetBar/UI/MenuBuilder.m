@@ -591,10 +591,14 @@
             ConnectionTraffic *connection = stats.topConnections[i];
             NSString *bytesStr = [SNBByteFormatter stringFromBytes:connection.bytes];
 
-            NSString *fullText = [NSString stringWithFormat:@"  %@ → %@ - %@",
-                                 connection.sourceAddress,
-                                 connection.destinationAddress,
-                                 bytesStr];
+            // Format connection
+            NSString *fullText = [NSString stringWithFormat:@"  %@:%ld → %@:%ld - %@",
+                       connection.sourceAddress,
+                       (long)connection.sourcePort,
+                       connection.destinationAddress,
+                       (long)connection.destinationPort,
+                       bytesStr];
+
             NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
             connectionItem.enabled = NO;
             [visualizationSubmenu addItem:connectionItem];

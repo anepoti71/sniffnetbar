@@ -25,8 +25,6 @@ typedef NS_ENUM(NSInteger, SNBAuthorizationStatus) {
 
 + (BOOL)relaunchAsRoot;
 
-+ (void)showAuthorizationDialog:(void (^)(BOOL accepted))completion;
-
 @end
 
 NS_ASSUME_NONNULL_END

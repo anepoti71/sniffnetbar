@@ -67,7 +67,11 @@ void testMockThreatIntel() {
         }];
     }
 
-    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+    // Wait with timeout for all enrichments to complete
+    long result = dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    if (result != 0) {
+        NSLog(@"⚠️  Timeout waiting for enrichment responses");
+    }
 
     // Show cache stats
     NSDictionary *stats = [facade cacheStats];
@@ -76,9 +80,12 @@ void testMockThreatIntel() {
     NSLog(@"=== Test Complete ===");
 }
 
-int main(int argc, const char * argv[]) {
+int main(int argc __unused, const char * argv[] __unused) {
     @autoreleasepool {
         testMockThreatIntel();
+
+        // Allow time for async operations to complete
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
     }
     return 0;
 }

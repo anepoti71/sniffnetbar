@@ -9,6 +9,7 @@
 #import "PacketInfo.h"
 #import "ExpiringCache.h"
 #import "Logger.h"
+#import "ProcessLookup.h"
 #import <sys/socket.h>
 #import <netinet/in.h>
 #import <arpa/inet.h>
@@ -37,6 +38,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 @property (nonatomic, strong) NSMutableSet<NSString *> *localAddresses;
 @property (nonatomic, strong) SNBExpiringCache<NSString *, NSString *> *hostnameCache;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *dnsLookupLocks;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *processLookupLocks;
 @property (nonatomic, strong) dispatch_queue_t statsQueue;
 @property (nonatomic, strong) NSDate *lastUpdateTime;
 @property (nonatomic, assign) uint64_t lastTotalBytes;
@@ -60,6 +62,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         _hostnameCache = [[SNBExpiringCache alloc] initWithMaxSize:kMaxHostnameCacheSize
                                                 expirationInterval:kCacheExpirationTime];
         _dnsLookupLocks = [NSMutableDictionary dictionary];
+        _processLookupLocks = [NSMutableDictionary dictionary];
         _statsQueue = dispatch_queue_create("com.sniffnetbar.stats", DISPATCH_QUEUE_SERIAL);
         _localAddresses = [NSMutableSet set];
         _statsCacheDirty = YES;
@@ -242,14 +245,56 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         // Track connection statistics (use destination->source for inbound)
         NSString *connectionSource = isIncoming ? packetInfo.destinationAddress : packetInfo.sourceAddress;
         NSString *connectionDestination = isIncoming ? packetInfo.sourceAddress : packetInfo.destinationAddress;
+        NSInteger connectionSourcePort = isIncoming ? packetInfo.destinationPort : packetInfo.sourcePort;
+        NSInteger connectionDestinationPort = isIncoming ? packetInfo.sourcePort : packetInfo.destinationPort;
+
         if (connectionSource.length > 0 && connectionDestination.length > 0) {
-            NSString *connectionKey = [NSString stringWithFormat:@"%@->%@", connectionSource, connectionDestination];
+            NSString *connectionKey = [NSString stringWithFormat:@"%@:%ld->%@:%ld",
+                                       connectionSource, (long)connectionSourcePort,
+                                       connectionDestination, (long)connectionDestinationPort];
             ConnectionTraffic *connection = self.connectionStats[connectionKey];
             if (!connection) {
                 connection = [[ConnectionTraffic alloc] init];
                 connection.sourceAddress = connectionSource;
                 connection.destinationAddress = connectionDestination;
+                connection.sourcePort = connectionSourcePort;
+                connection.destinationPort = connectionDestinationPort;
                 self.connectionStats[connectionKey] = connection;
+
+                // Lookup process information asynchronously
+                // Only lookup for outgoing connections (where source is local)
+                if (!isIncoming && connectionSourcePort > 0 && connectionDestinationPort > 0) {
+                    SNBLogInfo("Process lookup: %@:%ld -> %@:%ld",
+                          connectionSource, (long)connectionSourcePort,
+                          connectionDestination, (long)connectionDestinationPort);
+                    __weak typeof(self) weakSelf = self;
+                    [self performProcessLookup:connectionSource
+                                    sourcePort:connectionSourcePort
+                                   destination:connectionDestination
+                               destinationPort:connectionDestinationPort
+                                    completion:^(ProcessInfo *processInfo) {
+                        __strong typeof(weakSelf) strongSelf = weakSelf;
+                        if (!strongSelf) return;
+
+                        dispatch_async(strongSelf.statsQueue, ^{
+                            ConnectionTraffic *conn = strongSelf.connectionStats[connectionKey];
+                            if (conn && processInfo) {
+                                SNBLogInfo("✓ Found process: %@ (PID %d) for %@:%ld -> %@:%ld",
+                                      processInfo.processName, processInfo.pid,
+                                      connectionSource, (long)connectionSourcePort,
+                                      connectionDestination, (long)connectionDestinationPort);
+                                conn.processName = processInfo.processName;
+                                conn.processPID = processInfo.pid;
+                            } else if (conn) {
+                                SNBLogInfo("✗ No process found for connection %@", connectionKey);
+                            }
+                        });
+                    }];
+                } else {
+                    if (isIncoming) {
+                        SNBLogInfo("Skipping process lookup for incoming connection");
+                    }
+                }
             }
             connection.bytes += packetInfo.totalBytes;
             connection.packetCount++;
@@ -329,6 +374,47 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
             }
         }
     });
+}
+
+- (void)performProcessLookup:(NSString *)sourceAddress
+                  sourcePort:(NSInteger)sourcePort
+                 destination:(NSString *)destinationAddress
+             destinationPort:(NSInteger)destinationPort
+                  completion:(void (^)(ProcessInfo *))completion {
+    // Create unique key for this connection
+    NSString *lookupKey = [NSString stringWithFormat:@"%@:%ld->%@:%ld",
+                           sourceAddress, (long)sourcePort,
+                           destinationAddress, (long)destinationPort];
+
+    // Get or create lock for this lookup
+    NSObject *lock = nil;
+    @synchronized(self.processLookupLocks) {
+        lock = self.processLookupLocks[lookupKey];
+        if (!lock) {
+            lock = [[NSObject alloc] init];
+            self.processLookupLocks[lookupKey] = lock;
+        } else {
+            // Lookup already in progress
+            return;
+        }
+    }
+
+    [ProcessLookup lookupProcessForConnectionWithSource:sourceAddress
+                                             sourcePort:sourcePort
+                                            destination:destinationAddress
+                                        destinationPort:destinationPort
+                                             completion:^(ProcessInfo *processInfo) {
+        if (completion) {
+            completion(processInfo);
+        }
+
+        // Clean up lock
+        @synchronized(self.processLookupLocks) {
+            if (self.processLookupLocks[lookupKey] == lock) {
+                [self.processLookupLocks removeObjectForKey:lookupKey];
+            }
+        }
+    }];
 }
 
 - (TrafficStats *)currentStatsLocked {

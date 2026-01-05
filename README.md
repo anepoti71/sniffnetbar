@@ -7,6 +7,7 @@ Fork of Sniffnet, extended into a macOS menu bar application with passive threat
 - Monitors network traffic in the macOS menubar
 - Captures and analyzes packets with libpcap
 - Tracks totals, packet counts, top hosts, and top connections
+- **Shows which process is creating each network connection**
 - Resolves hostnames with reverse DNS
 - Supports TCP, UDP, ICMP, IPv4, and IPv6
 - Includes an embedded map view (Leaflet) for public IP geolocation

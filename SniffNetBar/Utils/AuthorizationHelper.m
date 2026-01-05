@@ -17,27 +17,6 @@
     return geteuid() == 0;
 }
 
-+ (void)showAuthorizationDialog:(void (^)(BOOL accepted))completion {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Root Privileges Required";
-        alert.informativeText = @"SniffNetBar needs root privileges to capture network packets.\n\n"
-                                @"This is required because packet capture requires low-level access to network interfaces.\n\n"
-                                @"Your password will be requested to grant these privileges.";
-        alert.alertStyle = NSAlertStyleInformational;
-        [alert addButtonWithTitle:@"Grant Access"];
-        [alert addButtonWithTitle:@"Quit"];
-
-        alert.icon = [NSImage imageNamed:NSImageNameCaution];
-
-        NSModalResponse response = [alert runModal];
-
-        if (completion) {
-            completion(response == NSAlertFirstButtonReturn);
-        }
-    });
-}
-
 + (SNBAuthorizationStatus)requestAuthorizationWithMessage:(NSString *)message
                                             informativeText:(NSString *)informativeText {
     if ([self isRunningAsRoot]) {
@@ -104,9 +83,17 @@
                               kAuthorizationFlagPreAuthorize |
                               kAuthorizationFlagExtendRights;
 
+    // Create custom prompt for authorization dialog
+    NSString *promptMessage = @"SniffNetBar needs root privileges to capture network packets.\n\n"
+                              @"This is required because packet capture requires low-level access to network interfaces.";
+    AuthorizationItem envItems[] = {
+        {kAuthorizationEnvironmentPrompt, [promptMessage length], (void *)[promptMessage UTF8String], 0}
+    };
+    AuthorizationEnvironment environment = {1, envItems};
+
     status = AuthorizationCopyRights(authRef,
                                     &authRights,
-                                    kAuthorizationEmptyEnvironment,
+                                    &environment,
                                     flags,
                                     NULL);
 

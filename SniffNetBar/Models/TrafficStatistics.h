@@ -43,7 +43,11 @@
 
 @property (nonatomic, strong) NSString *sourceAddress;
 @property (nonatomic, strong) NSString *destinationAddress;
+@property (nonatomic, assign) NSInteger sourcePort;
+@property (nonatomic, assign) NSInteger destinationPort;
 @property (nonatomic, assign) uint64_t bytes;
 @property (nonatomic, assign) NSInteger packetCount;
+@property (nonatomic, strong, nullable) NSString *processName;
+@property (nonatomic, assign) pid_t processPID;
 
 @end
