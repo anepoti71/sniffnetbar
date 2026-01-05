@@ -19,6 +19,8 @@
 #import "AnomalyStore.h"
 #import "AnomalyExplainabilityCoordinator.h"
 #import "KeychainManager.h"
+#import "NetworkAssetMonitor.h"
+#import "UserDefaultsKeys.h"
 
 @interface AppCoordinator ()
 @property (nonatomic, strong, readwrite) TrafficStatistics *statistics;
@@ -35,6 +37,7 @@
 @property (nonatomic, weak) NSStatusItem *statusItem;
 @property (nonatomic, weak) NSMenu *statusMenu;
 @property (nonatomic, assign) BOOL menuRefreshPending;
+@property (nonatomic, strong) SNBNetworkAssetMonitor *assetMonitor;
 @end
 
 @implementation AppCoordinator
@@ -60,6 +63,7 @@
         _anomalyExplainabilityCoordinator = [[SNBAnomalyExplainabilityCoordinator alloc]
                                              initWithConfiguration:_configuration
                                              threatIntelCoordinator:_threatIntelCoordinator];
+        _assetMonitor = [[SNBNetworkAssetMonitor alloc] init];
 
         // Set up callback for packet updates
         __weak typeof(self) weakSelf = self;
@@ -81,6 +85,14 @@
 
     // Start packet capture
     [self startCaptureWithCurrentDevice];
+
+    // Start asset monitor if enabled
+    BOOL assetMonitorEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:SNBUserDefaultsKeyAssetMonitorEnabled];
+    self.assetMonitor.enabled = assetMonitorEnabled;
+    __weak typeof(self) weakSelfAsset = self;
+    self.assetMonitor.onAssetsUpdated = ^(NSArray<SNBNetworkAsset *> *assets, NSArray<SNBNetworkAsset *> *newAssets) {
+        [weakSelfAsset scheduleMenuRefresh];
+    };
 
     // Set up timer to update UI
     __weak typeof(self) weakSelf = self;
@@ -120,6 +132,7 @@
     self.anomalyRetrainTimer = nil;
     [self.deviceManager.packetManager stopCapture];
     [self.anomalyDetector flushIfNeeded];
+    [self.assetMonitor stop];
 }
 
 - (void)startCaptureWithCurrentDevice {
@@ -158,7 +171,10 @@
             [strongSelf.menuBuilder refreshVisualizationWithStats:stats
                                              threatIntelEnabled:strongSelf.threatIntelCoordinator.isEnabled
                                             threatIntelResults:[strongSelf.threatIntelCoordinator resultsSnapshot]
-                                                     cacheStats:[strongSelf.threatIntelCoordinator cacheStats]];
+                                                     cacheStats:[strongSelf.threatIntelCoordinator cacheStats]
+                                           assetMonitorEnabled:strongSelf.assetMonitor.isEnabled
+                                                networkAssets:[strongSelf.assetMonitor assetsSnapshot]
+                                              recentNewAssets:[strongSelf.assetMonitor recentNewAssetsSnapshot]];
         } else {
             [strongSelf updateMenuWithStats:stats];
         }
@@ -192,6 +208,9 @@
                        threatIntelEnabled:self.threatIntelCoordinator.isEnabled
                       threatIntelResults:[self.threatIntelCoordinator resultsSnapshot]
                                cacheStats:[self.threatIntelCoordinator cacheStats]
+                       assetMonitorEnabled:self.assetMonitor.isEnabled
+                            networkAssets:[self.assetMonitor assetsSnapshot]
+                          recentNewAssets:[self.assetMonitor recentNewAssetsSnapshot]
                                    target:self];
 }
 
@@ -234,6 +253,13 @@
 
 - (void)toggleThreatIntel:(NSMenuItem *)sender {
     [self.threatIntelCoordinator toggleEnabled];
+    [self updateMenu];
+}
+
+- (void)toggleAssetMonitor:(NSMenuItem *)sender {
+    BOOL enabled = !self.assetMonitor.isEnabled;
+    self.assetMonitor.enabled = enabled;
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:SNBUserDefaultsKeyAssetMonitorEnabled];
     [self updateMenu];
 }
 

@@ -129,22 +129,32 @@ static void *kCaptureQueueKey = &kCaptureQueueKey;
 }
 
 // String interning for IP addresses to reduce memory allocations
+// Performance optimization: Check cache first before creating NSString
 - (NSString *)internIPString:(const char *)ipCString {
     if (!ipCString) {
         return nil;
     }
 
-    NSString *key = [NSString stringWithUTF8String:ipCString];
-
-    // NSCache is thread-safe, no need for explicit synchronization
-    NSString *internedString = [self.ipStringCache objectForKey:key];
-    if (!internedString) {
-        // Cache miss - store the string
-        // NSCache automatically handles LRU eviction when countLimit is exceeded
-        internedString = key;
-        [self.ipStringCache setObject:internedString forKey:key];
+    // Create a temporary CFString to use as lookup key (zero-copy)
+    CFStringRef cfKey = CFStringCreateWithCStringNoCopy(kCFAllocatorDefault,
+                                                         ipCString,
+                                                         kCFStringEncodingUTF8,
+                                                         kCFAllocatorNull);
+    if (!cfKey) {
+        return nil;
     }
 
+    // NSCache is thread-safe, no need for explicit synchronization
+    NSString *internedString = [self.ipStringCache objectForKey:(__bridge NSString *)cfKey];
+
+    if (!internedString) {
+        // Cache miss - create owned string and store it
+        // NSCache automatically handles LRU eviction when countLimit is exceeded
+        internedString = (__bridge_transfer NSString *)CFStringCreateCopy(kCFAllocatorDefault, cfKey);
+        [self.ipStringCache setObject:internedString forKey:internedString];
+    }
+
+    CFRelease(cfKey);
     return internedString;
 }
 

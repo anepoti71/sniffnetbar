@@ -11,6 +11,9 @@
 #import "ThreatIntelModels.h"
 #import "TrafficStatistics.h"
 #import "UserDefaultsKeys.h"
+#import "NetworkAssetMonitor.h"
+#import <ifaddrs.h>
+#import <arpa/inet.h>
 #import "Logger.h"
 
 @interface MenuBuilder ()
@@ -32,6 +35,46 @@
 @implementation MenuBuilder
 
 static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
+static const CFAbsoluteTime kLocalIPCacheTTLSeconds = 60.0;
+
+static NSSet<NSString *> *SNBLocalIPAddresses(void) {
+    static NSSet<NSString *> *cached = nil;
+    static CFAbsoluteTime lastFetch = 0;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (cached && (now - lastFetch) < kLocalIPCacheTTLSeconds) {
+        return cached;
+    }
+
+    NSMutableSet<NSString *> *addresses = [NSMutableSet set];
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) == 0) {
+        for (struct ifaddrs *ifa = interfaces; ifa != NULL; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr) continue;
+            int family = ifa->ifa_addr->sa_family;
+            if (family == AF_INET) {
+                char addr[INET_ADDRSTRLEN];
+                struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+                if (inet_ntop(AF_INET, &sin->sin_addr, addr, sizeof(addr))) {
+                    [addresses addObject:[NSString stringWithUTF8String:addr]];
+                }
+            } else if (family == AF_INET6) {
+                char addr[INET6_ADDRSTRLEN];
+                struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+                if (inet_ntop(AF_INET6, &sin6->sin6_addr, addr, sizeof(addr))) {
+                    [addresses addObject:[NSString stringWithUTF8String:addr]];
+                }
+            }
+        }
+        freeifaddrs(interfaces);
+    }
+
+    [addresses addObject:@"127.0.0.1"];
+    [addresses addObject:@"::1"];
+
+    cached = [addresses copy];
+    lastFetch = now;
+    return cached;
+}
 
 - (instancetype)initWithMenu:(NSMenu *)menu
                   statusItem:(NSStatusItem *)statusItem
@@ -363,6 +406,9 @@ static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
          threatIntelEnabled:(BOOL)threatIntelEnabled
         threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                  cacheStats:(NSDictionary *)cacheStats
+        assetMonitorEnabled:(BOOL)assetMonitorEnabled
+             networkAssets:(NSArray<SNBNetworkAsset *> *)networkAssets
+           recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets
                      target:(id)target {
 
     // Optimization: Only rebuild menu if there are significant changes
@@ -433,6 +479,12 @@ static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
     toggleThreatIntel.target = target;
     toggleThreatIntel.state = threatIntelEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [settingsSubmenu addItem:toggleThreatIntel];
+    NSMenuItem *toggleAssetMonitor = [[NSMenuItem alloc] initWithTitle:@"Monitor Network Assets"
+                                                                action:@selector(toggleAssetMonitor:)
+                                                         keyEquivalent:@""];
+    toggleAssetMonitor.target = target;
+    toggleAssetMonitor.state = assetMonitorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [settingsSubmenu addItem:toggleAssetMonitor];
 
     NSMenuItem *providerItem = [[NSMenuItem alloc] initWithTitle:@"GeoLocation Provider" action:nil keyEquivalent:@""];
     NSMenu *providerSubmenu = [[NSMenu alloc] init];
@@ -461,7 +513,10 @@ static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
     [self rebuildVisualizationMenuWithStats:stats
                         threatIntelEnabled:threatIntelEnabled
                        threatIntelResults:threatIntelResults
-                                cacheStats:cacheStats];
+                                cacheStats:cacheStats
+                      assetMonitorEnabled:assetMonitorEnabled
+                           networkAssets:networkAssets
+                         recentNewAssets:recentNewAssets];
 
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
@@ -529,7 +584,10 @@ static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
 - (void)refreshVisualizationWithStats:(TrafficStats *)stats
                   threatIntelEnabled:(BOOL)threatIntelEnabled
                  threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
-                          cacheStats:(NSDictionary *)cacheStats {
+                          cacheStats:(NSDictionary *)cacheStats
+                assetMonitorEnabled:(BOOL)assetMonitorEnabled
+                     networkAssets:(NSArray<SNBNetworkAsset *> *)networkAssets
+                   recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets {
     if (!self.menuIsOpen || !self.visualizationSubmenu) {
         return;
     }
@@ -548,7 +606,10 @@ static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
     [self rebuildVisualizationMenuWithStats:stats
                         threatIntelEnabled:threatIntelEnabled
                        threatIntelResults:threatIntelResults
-                                cacheStats:cacheStats];
+                                cacheStats:cacheStats
+                      assetMonitorEnabled:assetMonitorEnabled
+                           networkAssets:networkAssets
+                         recentNewAssets:recentNewAssets];
     [self truncateMenuItemsInMenu:self.visualizationSubmenu maxWidth:self.configuration.menuFixedWidth];
 }
 
@@ -579,7 +640,10 @@ static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
 - (void)rebuildVisualizationMenuWithStats:(TrafficStats *)stats
                       threatIntelEnabled:(BOOL)threatIntelEnabled
                      threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
-                              cacheStats:(NSDictionary *)cacheStats {
+                              cacheStats:(NSDictionary *)cacheStats
+                    assetMonitorEnabled:(BOOL)assetMonitorEnabled
+                         networkAssets:(NSArray<SNBNetworkAsset *> *)networkAssets
+                       recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets {
     NSMenu *visualizationSubmenu = self.visualizationSubmenu;
     if (!visualizationSubmenu) {
         return;
@@ -674,6 +738,40 @@ static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
                                                          color:[NSColor secondaryLabelColor]]];
 
     [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
+
+    // Asset Monitor
+    [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"ASSET MONITOR" style:@"header"]];
+    if (!assetMonitorEnabled) {
+        NSMenuItem *disabledItem = [[NSMenuItem alloc] initWithTitle:@"Asset Monitor: Off (enable in Settings)"
+                                                             action:nil
+                                                      keyEquivalent:@""];
+        disabledItem.enabled = NO;
+        [visualizationSubmenu addItem:disabledItem];
+    } else if (networkAssets.count == 0) {
+        NSMenuItem *emptyItem = [[NSMenuItem alloc] initWithTitle:@"No devices detected yet"
+                                                          action:nil
+                                                   keyEquivalent:@""];
+        emptyItem.enabled = NO;
+        [visualizationSubmenu addItem:emptyItem];
+    } else {
+        NSString *totalStr = [NSString stringWithFormat:@"%lu", (unsigned long)networkAssets.count];
+        [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Known Devices" value:totalStr
+                                                             color:[NSColor labelColor]]];
+        if (recentNewAssets.count > 0) {
+            [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"New Devices" style:@"subheader"]];
+            NSUInteger limit = MIN(3, recentNewAssets.count);
+            for (NSUInteger i = 0; i < limit; i++) {
+                SNBNetworkAsset *asset = recentNewAssets[i];
+                NSString *name = asset.hostname.length > 0 ? asset.hostname : asset.ipAddress;
+                NSString *line = [NSString stringWithFormat:@"  %@ (%@)", name, asset.macAddress];
+                NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:line action:nil keyEquivalent:@""];
+                item.enabled = NO;
+                [visualizationSubmenu addItem:item];
+            }
+        }
+    }
+
+    [visualizationSubmenu addItem:[NSMenuItem separatorItem]];
     [visualizationSubmenu addItem:detailsItem];
 
     // Details submenu content
@@ -758,6 +856,26 @@ static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
             NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
             connectionItem.enabled = NO;
             [detailsSubmenu addItem:connectionItem];
+        }
+    }
+
+    if (assetMonitorEnabled && networkAssets.count > 0) {
+        [detailsSubmenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *assetsTitle = [[NSMenuItem alloc] initWithTitle:@"NETWORK ASSETS" action:nil keyEquivalent:@""];
+        assetsTitle.enabled = NO;
+        [detailsSubmenu addItem:assetsTitle];
+
+        NSSet<NSString *> *localIPs = SNBLocalIPAddresses();
+        NSUInteger limit = MIN(10, networkAssets.count);
+        for (NSUInteger i = 0; i < limit; i++) {
+            SNBNetworkAsset *asset = networkAssets[i];
+            NSString *name = asset.hostname.length > 0 ? asset.hostname : @"Unknown";
+            BOOL isLocal = [localIPs containsObject:asset.ipAddress];
+            NSString *suffix = isLocal ? @" (This Mac)" : @"";
+            NSString *line = [NSString stringWithFormat:@"  %@ - %@%@", name, asset.ipAddress, suffix];
+            NSMenuItem *assetItem = [[NSMenuItem alloc] initWithTitle:line action:nil keyEquivalent:@""];
+            assetItem.enabled = NO;
+            [detailsSubmenu addItem:assetItem];
         }
     }
 

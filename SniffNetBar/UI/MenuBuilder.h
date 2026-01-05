@@ -9,6 +9,7 @@
 @class NetworkDevice;
 @class TrafficStats;
 @class TIEnrichmentResponse;
+@class SNBNetworkAsset;
 
 @interface MenuBuilder : NSObject
 
@@ -28,11 +29,17 @@
          threatIntelEnabled:(BOOL)threatIntelEnabled
         threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                  cacheStats:(NSDictionary *)cacheStats
+        assetMonitorEnabled:(BOOL)assetMonitorEnabled
+             networkAssets:(NSArray<SNBNetworkAsset *> *)networkAssets
+           recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets
                      target:(id)target;
 - (void)refreshVisualizationWithStats:(TrafficStats *)stats
                   threatIntelEnabled:(BOOL)threatIntelEnabled
                  threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
-                          cacheStats:(NSDictionary *)cacheStats;
+                          cacheStats:(NSDictionary *)cacheStats
+                assetMonitorEnabled:(BOOL)assetMonitorEnabled
+                     networkAssets:(NSArray<SNBNetworkAsset *> *)networkAssets
+                   recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets;
 - (void)menuWillOpenWithStats:(TrafficStats *)stats;
 - (void)menuDidClose;
 - (void)selectMapProviderWithName:(NSString *)providerName stats:(TrafficStats *)stats;

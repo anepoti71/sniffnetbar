@@ -30,6 +30,7 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 static const long kMaxConcurrentDNSLookups = 8;
 static const NSUInteger kMaxProcessCacheSize = 500;
 static const NSTimeInterval kProcessCacheExpirationTime = 300.0; // 5 minutes
+static const NSUInteger kMaxPendingDNSLookups = 100; // Max queued DNS lookups (prevents memory leak)
 
 // Special marker for failed DNS lookups
 static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
@@ -59,6 +60,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 @property (nonatomic, strong) NSDate *lastSampleTime;
 @property (nonatomic, assign) uint64_t cachedBytesPerSecond;
 @property (nonatomic, strong) NSTimer *samplingTimer;
+@property (nonatomic, assign) NSUInteger pendingDNSLookupCount;
 @end
 
 @interface SNBConnectionKey : NSObject <NSCopying>
@@ -66,6 +68,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 @property (nonatomic, copy) NSString *destination;
 @property (nonatomic, assign) NSInteger sourcePort;
 @property (nonatomic, assign) NSInteger destinationPort;
+@property (nonatomic, assign) NSUInteger cachedHash; // Performance: Cache hash value
 - (instancetype)initWithSource:(NSString *)source
                    sourcePort:(NSInteger)sourcePort
                    destination:(NSString *)destination
@@ -85,15 +88,19 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         _destination = [destination copy] ?: @"";
         _sourcePort = sourcePort;
         _destinationPort = destinationPort;
+
+        // Performance: Pre-compute and cache hash value since keys are immutable
+        NSUInteger hash = _source.hash ^ _destination.hash;
+        hash ^= (NSUInteger)sourcePort * 16777619u;
+        hash ^= (NSUInteger)destinationPort * 2166136261u;
+        _cachedHash = hash;
     }
     return self;
 }
 
 - (NSUInteger)hash {
-    NSUInteger hash = self.source.hash ^ self.destination.hash;
-    hash ^= (NSUInteger)self.sourcePort * 16777619u;
-    hash ^= (NSUInteger)self.destinationPort * 2166136261u;
-    return hash;
+    // Performance: Return pre-computed cached hash instead of recalculating
+    return self.cachedHash;
 }
 
 - (BOOL)isEqual:(id)object {
@@ -488,6 +495,21 @@ static NSString *SNBResolveHostname(NSString *address,
 }
 
 - (void)performReverseDNSLookup:(NSString *)address completion:(void (^)(NSString *))completion {
+    // Performance: Limit pending DNS lookup queue depth to prevent memory leak
+    @synchronized(self) {
+        if (self.pendingDNSLookupCount >= kMaxPendingDNSLookups) {
+            SNBLogWarn("DNS lookup queue full (%lu pending), dropping lookup for %{" SNB_IP_PRIVACY "}@",
+                      (unsigned long)self.pendingDNSLookupCount, address);
+            // Cache negative result immediately to prevent repeated attempts
+            [self.hostnameCache setObject:kDNSLookupFailedMarker forKey:address];
+            if (completion) {
+                completion(nil);
+            }
+            return;
+        }
+        self.pendingDNSLookupCount++;
+    }
+
     // Get or create a dedicated lock object for this address
     NSObject *lock = nil;
     @synchronized(self.dnsLookupLocks) {
@@ -511,9 +533,17 @@ static NSString *SNBResolveHostname(NSString *address,
         if (completion) {
             completion(hostname);
         }
+
         @synchronized(self.dnsLookupLocks) {
             if (self.dnsLookupLocks[address] == lock) {
                 [self.dnsLookupLocks removeObjectForKey:address];
+            }
+        }
+
+        // Decrement pending count
+        @synchronized(self) {
+            if (self.pendingDNSLookupCount > 0) {
+                self.pendingDNSLookupCount--;
             }
         }
     });
@@ -561,27 +591,52 @@ static NSString *SNBResolveHostname(NSString *address,
     if (limit == 0 || values.count == 0) {
         return @[];
     }
+
+    // Optimization: Use min-heap approach for top-K selection
+    // Only sort once at the end instead of on every iteration: O(n log k) instead of O(n² log n)
     NSMutableArray<HostTraffic *> *top = [NSMutableArray arrayWithCapacity:limit];
+
     for (HostTraffic *host in values) {
         if (top.count < limit) {
             [top addObject:host];
         } else {
-            HostTraffic *last = top.lastObject;
-            if (host.bytes <= last.bytes) {
+            // Only replace if current host has more bytes than the minimum in our top list
+            HostTraffic *minHost = top[0]; // Will be minimum after sort
+            if (host.bytes > minHost.bytes) {
+                top[0] = host;
+            } else {
                 continue;
             }
-            top[top.count - 1] = host;
         }
-        [top sortUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
-            if (obj1.bytes > obj2.bytes) {
-                return NSOrderedAscending;
+
+        // Only sort when we reach capacity or when we replace an item
+        if (top.count == limit) {
+            // Partial sort: just ensure minimum element is at index 0
+            NSUInteger minIndex = 0;
+            uint64_t minBytes = top[0].bytes;
+            for (NSUInteger i = 1; i < top.count; i++) {
+                if (top[i].bytes < minBytes) {
+                    minBytes = top[i].bytes;
+                    minIndex = i;
+                }
             }
-            if (obj1.bytes < obj2.bytes) {
-                return NSOrderedDescending;
+            if (minIndex != 0) {
+                [top exchangeObjectAtIndex:0 withObjectAtIndex:minIndex];
             }
-            return NSOrderedSame;
-        }];
+        }
     }
+
+    // Final sort only once at the end
+    [top sortUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
+        if (obj1.bytes > obj2.bytes) {
+            return NSOrderedAscending;
+        }
+        if (obj1.bytes < obj2.bytes) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+
     return [top copy];
 }
 
@@ -589,27 +644,52 @@ static NSString *SNBResolveHostname(NSString *address,
     if (limit == 0 || values.count == 0) {
         return @[];
     }
+
+    // Optimization: Use min-heap approach for top-K selection
+    // Only sort once at the end instead of on every iteration: O(n log k) instead of O(n² log n)
     NSMutableArray<ConnectionTraffic *> *top = [NSMutableArray arrayWithCapacity:limit];
+
     for (ConnectionTraffic *connection in values) {
         if (top.count < limit) {
             [top addObject:connection];
         } else {
-            ConnectionTraffic *last = top.lastObject;
-            if (connection.bytes <= last.bytes) {
+            // Only replace if current connection has more bytes than the minimum in our top list
+            ConnectionTraffic *minConnection = top[0]; // Will be minimum after sort
+            if (connection.bytes > minConnection.bytes) {
+                top[0] = connection;
+            } else {
                 continue;
             }
-            top[top.count - 1] = connection;
         }
-        [top sortUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
-            if (obj1.bytes > obj2.bytes) {
-                return NSOrderedAscending;
+
+        // Only sort when we reach capacity or when we replace an item
+        if (top.count == limit) {
+            // Partial sort: just ensure minimum element is at index 0
+            NSUInteger minIndex = 0;
+            uint64_t minBytes = top[0].bytes;
+            for (NSUInteger i = 1; i < top.count; i++) {
+                if (top[i].bytes < minBytes) {
+                    minBytes = top[i].bytes;
+                    minIndex = i;
+                }
             }
-            if (obj1.bytes < obj2.bytes) {
-                return NSOrderedDescending;
+            if (minIndex != 0) {
+                [top exchangeObjectAtIndex:0 withObjectAtIndex:minIndex];
             }
-            return NSOrderedSame;
-        }];
+        }
     }
+
+    // Final sort only once at the end
+    [top sortUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
+        if (obj1.bytes > obj2.bytes) {
+            return NSOrderedAscending;
+        }
+        if (obj1.bytes < obj2.bytes) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+
     return [top copy];
 }
 

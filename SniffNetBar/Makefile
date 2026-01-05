@@ -39,7 +39,7 @@ MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m \
                 Models/AnomalyPythonScorer.m Models/AnomalyCoreMLScorer.m \
                 Models/AnomalyExplanationService.m
 NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m \
-                  Network/DeviceManager.m
+                  Network/DeviceManager.m Network/NetworkAssetMonitor.m
 THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/ThreatIntelProvider.m \
                       ThreatIntel/ThreatIntelCache.m \

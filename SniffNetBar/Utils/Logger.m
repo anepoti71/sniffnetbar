@@ -8,6 +8,22 @@
 #import "Logger.h"
 #import "ConfigurationManager.h"
 
+// Console logging state
+static BOOL s_consoleLoggingEnabled = NO;
+
+// Enable/disable console output (in addition to os_log)
+void SNBSetConsoleLoggingEnabled(BOOL enabled) {
+    s_consoleLoggingEnabled = enabled;
+    if (enabled) {
+        fprintf(stderr, "[INFO][core] Console logging enabled\n");
+        fflush(stderr);
+    }
+}
+
+BOOL SNBIsConsoleLoggingEnabled(void) {
+    return s_consoleLoggingEnabled;
+}
+
 // Returns the runtime log level based on configuration and build type
 SNBLogLevel SNBGetRuntimeLogLevel(void) {
     if (SNBConfigurationManagerIsInitializing()) {

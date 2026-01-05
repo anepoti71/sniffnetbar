@@ -45,6 +45,11 @@ typedef NS_ENUM(NSInteger, SNBLogLevel) {
 // Returns the runtime log level based on configuration and build type
 extern SNBLogLevel SNBGetRuntimeLogLevel(void);
 
+// Enable/disable console output (in addition to os_log)
+// When enabled, logs are printed to stderr as well as os_log
+extern void SNBSetConsoleLoggingEnabled(BOOL enabled);
+extern BOOL SNBIsConsoleLoggingEnabled(void);
+
 // MARK: - Privacy Helpers
 
 // Privacy annotations for IP addresses
@@ -57,10 +62,22 @@ extern SNBLogLevel SNBGetRuntimeLogLevel(void);
 
 // MARK: - Core Logging Implementation
 
+// Helper to get level name
+static inline const char* SNBLogLevelName(SNBLogLevel level) {
+    switch (level) {
+        case SNBLogLevelError: return "ERROR";
+        case SNBLogLevelWarn:  return "WARN ";
+        case SNBLogLevelInfo:  return "INFO ";
+        case SNBLogLevelDebug: return "DEBUG";
+        default: return "?????";
+    }
+}
+
 // Internal logging implementation macro
 #define SNB_LOG_IMPL(level, category, fmt, ...) \
     do { \
         if (level <= SNB_LOG_LEVEL_MINIMUM && level <= SNBGetRuntimeLogLevel()) { \
+            /* Always log to os_log */ \
             os_log_t log_obj = os_log_create(SNB_LOG_SUBSYSTEM, category); \
             if (level == SNBLogLevelError) { \
                 os_log_error(log_obj, fmt, ##__VA_ARGS__); \
@@ -70,6 +87,11 @@ extern SNBLogLevel SNBGetRuntimeLogLevel(void);
                 os_log_info(log_obj, fmt, ##__VA_ARGS__); \
             } else { \
                 os_log_debug(log_obj, fmt, ##__VA_ARGS__); \
+            } \
+            /* Also log to console if enabled */ \
+            if (SNBIsConsoleLoggingEnabled()) { \
+                fprintf(stderr, "[%s][%s] " fmt "\n", SNBLogLevelName(level), category, ##__VA_ARGS__); \
+                fflush(stderr); \
             } \
         } \
     } while(0)
