@@ -24,6 +24,9 @@ static const NSUInteger kMaxHostnameCacheSize = 500;
 static const NSTimeInterval kCacheExpirationTime = 3600; // 1 hour
 static const NSTimeInterval kCleanupInterval = 300; // 5 minutes
 static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
+static const long kMaxConcurrentDNSLookups = 8;
+static const NSUInteger kMaxProcessCacheSize = 500;
+static const NSTimeInterval kProcessCacheExpirationTime = 300.0; // 5 minutes
 
 // Special marker for failed DNS lookups
 static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
@@ -37,8 +40,11 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 @property (nonatomic, assign) uint64_t totalPackets;
 @property (nonatomic, strong) NSMutableSet<NSString *> *localAddresses;
 @property (nonatomic, strong) SNBExpiringCache<NSString *, NSString *> *hostnameCache;
+@property (nonatomic, strong) SNBExpiringCache<NSString *, id> *processCache;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *dnsLookupLocks;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *processLookupLocks;
+@property (nonatomic, strong) dispatch_queue_t dnsLookupQueue;
+@property (nonatomic, strong) dispatch_semaphore_t dnsLookupSemaphore;
 @property (nonatomic, strong) dispatch_queue_t statsQueue;
 @property (nonatomic, strong) NSDate *lastUpdateTime;
 @property (nonatomic, assign) uint64_t lastTotalBytes;
@@ -61,8 +67,12 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         _connectionStats = [NSMutableDictionary dictionary];
         _hostnameCache = [[SNBExpiringCache alloc] initWithMaxSize:kMaxHostnameCacheSize
                                                 expirationInterval:kCacheExpirationTime];
+        _processCache = [[SNBExpiringCache alloc] initWithMaxSize:kMaxProcessCacheSize
+                                              expirationInterval:kProcessCacheExpirationTime];
         _dnsLookupLocks = [NSMutableDictionary dictionary];
         _processLookupLocks = [NSMutableDictionary dictionary];
+        _dnsLookupQueue = dispatch_queue_create("com.sniffnetbar.dnslookup", DISPATCH_QUEUE_CONCURRENT);
+        _dnsLookupSemaphore = dispatch_semaphore_create(kMaxConcurrentDNSLookups);
         _statsQueue = dispatch_queue_create("com.sniffnetbar.stats", DISPATCH_QUEUE_SERIAL);
         _localAddresses = [NSMutableSet set];
         _statsCacheDirty = YES;
@@ -264,6 +274,18 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
                 // Lookup process information asynchronously
                 // Only lookup for outgoing connections (where source is local)
                 if (!isIncoming && connectionSourcePort > 0 && connectionDestinationPort > 0) {
+                    BOOL shouldLookupProcess = YES;
+                    id cachedProcess = [self.processCache objectForKey:connectionKey];
+                    if (cachedProcess && cachedProcess != [NSNull null]) {
+                        ProcessInfo *processInfo = (ProcessInfo *)cachedProcess;
+                        connection.processName = processInfo.processName;
+                        connection.processPID = processInfo.pid;
+                        shouldLookupProcess = NO;
+                    } else if (cachedProcess == [NSNull null]) {
+                        shouldLookupProcess = NO;
+                    }
+
+                    if (shouldLookupProcess) {
                     SNBLogInfo("Process lookup: %@:%ld -> %@:%ld",
                           connectionSource, (long)connectionSourcePort,
                           connectionDestination, (long)connectionDestinationPort);
@@ -285,11 +307,14 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
                                       connectionDestination, (long)connectionDestinationPort);
                                 conn.processName = processInfo.processName;
                                 conn.processPID = processInfo.pid;
+                                [strongSelf.processCache setObject:processInfo forKey:connectionKey];
                             } else if (conn) {
                                 SNBLogInfo("✗ No process found for connection %@", connectionKey);
+                                [strongSelf.processCache setObject:[NSNull null] forKey:connectionKey];
                             }
                         });
                     }];
+                    }
                 } else {
                     if (isIncoming) {
                         SNBLogInfo("Skipping process lookup for incoming connection");
@@ -319,8 +344,24 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
     __block NSString *resultHostname = nil;
     __block BOOL lookupCompleted = NO;
 
+    void (^finish)(NSString *hostname, BOOL logTimeout) = ^(NSString *hostname, BOOL logTimeout) {
+        @synchronized(lock) {
+            if (lookupCompleted) {
+                return;
+            }
+            lookupCompleted = YES;
+            if (logTimeout) {
+                SNBLogWarn("DNS lookup timeout (%.0fs) for %{" SNB_IP_PRIVACY "}@", kDNSLookupTimeout, address);
+            }
+            resultHostname = hostname;
+            dispatch_group_leave(group);
+            dispatch_semaphore_signal(self.dnsLookupSemaphore);
+        }
+    };
+
     // Perform DNS lookup on background queue
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(self.dnsLookupQueue, ^{
+        dispatch_semaphore_wait(self.dnsLookupSemaphore, DISPATCH_TIME_FOREVER);
         struct sockaddr_in sin;
         struct sockaddr_in6 sin6;
         struct sockaddr *sa;
@@ -335,34 +376,24 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
             sa = (struct sockaddr *)&sin6;
             salen = sizeof(sin6);
         } else {
-            dispatch_group_leave(group);
+            finish(nil, NO);
             return;
         }
 
         char hostname[NI_MAXHOST];
         int result = getnameinfo(sa, salen, hostname, NI_MAXHOST, NULL, 0, NI_NAMEREQD);
 
-        @synchronized(lock) {  // Use dedicated lock object
-            if (!lookupCompleted) {
-                if (result == 0) {
-                    resultHostname = [NSString stringWithUTF8String:hostname];
-                }
-                lookupCompleted = YES;
-                dispatch_group_leave(group);
-            }
+        if (result == 0) {
+            finish([NSString stringWithUTF8String:hostname], NO);
+            return;
         }
+        finish(nil, NO);
     });
 
     // Set up timeout (5 seconds)
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kDNSLookupTimeout * NSEC_PER_SEC)),
                    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        @synchronized(lock) {  // Use dedicated lock object
-            if (!lookupCompleted) {
-                lookupCompleted = YES;
-                SNBLogWarn("DNS lookup timeout (%.0fs) for %{" SNB_IP_PRIVACY "}@", kDNSLookupTimeout, address);
-                dispatch_group_leave(group);
-            }
-        }
+        finish(nil, YES);
     });
 
     // Wait for completion or timeout, then call completion handler

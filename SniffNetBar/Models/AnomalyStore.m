@@ -149,6 +149,9 @@
             self.db = NULL;
         }
     } else {
+        sqlite3_exec(self.db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+        sqlite3_exec(self.db, "PRAGMA synchronous=NORMAL;", NULL, NULL, NULL);
+        sqlite3_busy_timeout(self.db, 2000);
         NSLog(@"Successfully opened/created database at %@", path);
     }
 }

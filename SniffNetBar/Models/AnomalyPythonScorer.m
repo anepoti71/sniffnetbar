@@ -7,6 +7,8 @@
 
 #import "AnomalyPythonScorer.h"
 
+static const NSTimeInterval kAnomalyPythonTimeoutSeconds = 5.0;
+
 @interface SNBAnomalyPythonScorer ()
 @property (nonatomic, copy) NSString *scriptPath;
 @property (nonatomic, copy) NSString *modelPath;
@@ -42,11 +44,17 @@
     NSPipe *stdoutPipe = [NSPipe pipe];
     task.standardInput = stdinPipe;
     task.standardOutput = stdoutPipe;
+    task.standardError = stdoutPipe;
 
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:error];
     if (!jsonData) {
         return nil;
     }
+
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    task.terminationHandler = ^(NSTask *terminatedTask) {
+        dispatch_semaphore_signal(done);
+    };
 
     @try {
         [task launch];
@@ -57,7 +65,14 @@
     [[stdinPipe fileHandleForWriting] writeData:jsonData];
     [[stdinPipe fileHandleForWriting] closeFile];
 
-    [task waitUntilExit];
+    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW,
+                                            (int64_t)(kAnomalyPythonTimeoutSeconds * NSEC_PER_SEC));
+    if (dispatch_semaphore_wait(done, timeout) != 0) {
+        [task terminate];
+        dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)));
+        return nil;
+    }
+
     NSData *outData = [[stdoutPipe fileHandleForReading] readDataToEndOfFile];
 
     if (task.terminationStatus != 0 || outData.length == 0) {

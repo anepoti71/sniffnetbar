@@ -161,8 +161,15 @@ static NSInteger const kDefaultMaxAgeInDays = 90;
 
             if (waitTime > 0) {
                 SNBLogThreatIntelDebug("Rate limit reached, waiting %.1f seconds", waitTime);
-                [NSThread sleepForTimeInterval:waitTime];
-                [self.requestTimestamps removeObjectAtIndex:0];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(waitTime * NSEC_PER_SEC)),
+                               self.rateLimitQueue, ^{
+                    if (self.requestTimestamps.count > 0) {
+                        [self.requestTimestamps removeObjectAtIndex:0];
+                    }
+                    [self.requestTimestamps addObject:[NSDate date]];
+                    if (block) block();
+                });
+                return;
             }
         }
 
