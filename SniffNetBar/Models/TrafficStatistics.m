@@ -10,12 +10,15 @@
 #import "ExpiringCache.h"
 #import "Logger.h"
 #import "ProcessLookup.h"
+#import "ConfigurationManager.h"
 #import <sys/socket.h>
 #import <netinet/in.h>
 #import <arpa/inet.h>
 #import <ifaddrs.h>
 #import <netdb.h>
 #import <SystemConfiguration/SystemConfiguration.h>
+#import <CFNetwork/CFNetwork.h>
+#import <string.h>
 
 // Cache size limits
 static const NSUInteger kMaxHostCacheSize = 1000;
@@ -33,16 +36,16 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 
 @interface TrafficStatistics ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, HostTraffic *> *hostStats;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, ConnectionTraffic *> *connectionStats;
+@property (nonatomic, strong) NSMutableDictionary *connectionStats;
 @property (nonatomic, assign) uint64_t totalBytes;
 @property (nonatomic, assign) uint64_t incomingBytes;
 @property (nonatomic, assign) uint64_t outgoingBytes;
 @property (nonatomic, assign) uint64_t totalPackets;
 @property (nonatomic, strong) NSMutableSet<NSString *> *localAddresses;
 @property (nonatomic, strong) SNBExpiringCache<NSString *, NSString *> *hostnameCache;
-@property (nonatomic, strong) SNBExpiringCache<NSString *, id> *processCache;
+@property (nonatomic, strong) SNBExpiringCache<id, id> *processCache;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *dnsLookupLocks;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *processLookupLocks;
+@property (nonatomic, strong) NSMutableDictionary *processLookupLocks;
 @property (nonatomic, strong) dispatch_queue_t dnsLookupQueue;
 @property (nonatomic, strong) dispatch_semaphore_t dnsLookupSemaphore;
 @property (nonatomic, strong) dispatch_queue_t statsQueue;
@@ -57,6 +60,163 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 @property (nonatomic, assign) uint64_t cachedBytesPerSecond;
 @property (nonatomic, strong) NSTimer *samplingTimer;
 @end
+
+@interface SNBConnectionKey : NSObject <NSCopying>
+@property (nonatomic, copy) NSString *source;
+@property (nonatomic, copy) NSString *destination;
+@property (nonatomic, assign) NSInteger sourcePort;
+@property (nonatomic, assign) NSInteger destinationPort;
+- (instancetype)initWithSource:(NSString *)source
+                   sourcePort:(NSInteger)sourcePort
+                   destination:(NSString *)destination
+               destinationPort:(NSInteger)destinationPort;
+- (NSString *)stringValue;
+@end
+
+@implementation SNBConnectionKey
+
+- (instancetype)initWithSource:(NSString *)source
+                   sourcePort:(NSInteger)sourcePort
+                   destination:(NSString *)destination
+               destinationPort:(NSInteger)destinationPort {
+    self = [super init];
+    if (self) {
+        _source = [source copy] ?: @"";
+        _destination = [destination copy] ?: @"";
+        _sourcePort = sourcePort;
+        _destinationPort = destinationPort;
+    }
+    return self;
+}
+
+- (NSUInteger)hash {
+    NSUInteger hash = self.source.hash ^ self.destination.hash;
+    hash ^= (NSUInteger)self.sourcePort * 16777619u;
+    hash ^= (NSUInteger)self.destinationPort * 2166136261u;
+    return hash;
+}
+
+- (BOOL)isEqual:(id)object {
+    if (![object isKindOfClass:[SNBConnectionKey class]]) {
+        return NO;
+    }
+    SNBConnectionKey *other = object;
+    return self.sourcePort == other.sourcePort &&
+        self.destinationPort == other.destinationPort &&
+        [self.source isEqualToString:other.source] &&
+        [self.destination isEqualToString:other.destination];
+}
+
+- (id)copyWithZone:(NSZone *)zone {
+    return self;
+}
+
+- (NSString *)stringValue {
+    return [NSString stringWithFormat:@"%@:%ld->%@:%ld",
+            self.source, (long)self.sourcePort, self.destination, (long)self.destinationPort];
+}
+
+@end
+
+typedef struct {
+    BOOL resolved;
+    CFStringRef name;
+} SNBDNSLookupContext;
+
+static void SNBDNSHostCallback(CFHostRef host,
+                               CFHostInfoType typeInfo,
+                               const CFStreamError *error,
+                               void *info) {
+    SNBDNSLookupContext *context = (SNBDNSLookupContext *)info;
+    if (!context || context->resolved) {
+        return;
+    }
+    Boolean hasResult = false;
+    CFArrayRef names = CFHostGetNames(host, &hasResult);
+    if (hasResult && names && CFArrayGetCount(names) > 0) {
+        CFStringRef name = CFArrayGetValueAtIndex(names, 0);
+        if (name) {
+            context->name = CFRetain(name);
+        }
+    }
+    context->resolved = YES;
+    CFRunLoopStop(CFRunLoopGetCurrent());
+}
+
+static NSString *SNBResolveHostname(NSString *address,
+                                    NSTimeInterval timeout,
+                                    BOOL *timedOut) {
+    if (timedOut) {
+        *timedOut = NO;
+    }
+    if (address.length == 0) {
+        return nil;
+    }
+
+    struct sockaddr_in sin;
+    struct sockaddr_in6 sin6;
+    NSData *addressData = nil;
+
+    memset(&sin, 0, sizeof(sin));
+    memset(&sin6, 0, sizeof(sin6));
+    if (inet_pton(AF_INET, address.UTF8String, &sin.sin_addr) == 1) {
+        sin.sin_family = AF_INET;
+        addressData = [NSData dataWithBytes:&sin length:sizeof(sin)];
+    } else if (inet_pton(AF_INET6, address.UTF8String, &sin6.sin6_addr) == 1) {
+        sin6.sin6_family = AF_INET6;
+        addressData = [NSData dataWithBytes:&sin6 length:sizeof(sin6)];
+    } else {
+        return nil;
+    }
+
+    CFHostRef host = CFHostCreateWithAddress(kCFAllocatorDefault, (__bridge CFDataRef)addressData);
+    if (!host) {
+        return nil;
+    }
+
+    SNBDNSLookupContext context = {0};
+    CFHostClientContext clientContext = {0, &context, NULL, NULL, NULL};
+    CFStreamError streamError = {0};
+    BOOL started = (BOOL)CFHostSetClient(host, SNBDNSHostCallback, &clientContext);
+    if (!started) {
+        CFRelease(host);
+        return nil;
+    }
+
+    CFHostScheduleWithRunLoop(host, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    Boolean ok = CFHostStartInfoResolution(host, kCFHostNames, &streamError);
+    if (!ok) {
+        CFHostSetClient(host, NULL, NULL);
+        CFHostUnscheduleFromRunLoop(host, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+        CFRelease(host);
+        return nil;
+    }
+
+    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + timeout;
+    while (!context.resolved) {
+        CFTimeInterval remaining = deadline - CFAbsoluteTimeGetCurrent();
+        if (remaining <= 0) {
+            if (timedOut) {
+                *timedOut = YES;
+            }
+            break;
+        }
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, MIN(0.1, remaining), true);
+    }
+
+    if (!context.resolved) {
+        CFHostCancelInfoResolution(host, kCFHostNames);
+    }
+
+    CFHostSetClient(host, NULL, NULL);
+    CFHostUnscheduleFromRunLoop(host, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    CFRelease(host);
+
+    if (context.name) {
+        return CFBridgingRelease(context.name);
+    }
+    return nil;
+}
 
 @implementation TrafficStatistics
 
@@ -153,16 +313,14 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 
         // If connection stats exceed max, remove entries with least traffic
         if (self.connectionStats.count > kMaxConnectionCacheSize) {
-            NSArray<ConnectionTraffic *> *sortedConnections = [self.connectionStats.allValues sortedArrayUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
+            NSArray *sortedKeys = [self.connectionStats keysSortedByValueUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
                 if (obj1.bytes < obj2.bytes) return NSOrderedAscending;
                 if (obj1.bytes > obj2.bytes) return NSOrderedDescending;
                 return NSOrderedSame;
             }];
             NSUInteger toRemove = self.connectionStats.count - kMaxConnectionCacheSize;
-            for (NSUInteger i = 0; i < toRemove && i < sortedConnections.count; i++) {
-                ConnectionTraffic *conn = sortedConnections[i];
-                NSString *key = [NSString stringWithFormat:@"%@->%@", conn.sourceAddress, conn.destinationAddress];
-                [self.connectionStats removeObjectForKey:key];
+            for (NSUInteger i = 0; i < toRemove && i < sortedKeys.count; i++) {
+                [self.connectionStats removeObjectForKey:sortedKeys[i]];
             }
             self.statsCacheDirty = YES;
         }
@@ -259,9 +417,10 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         NSInteger connectionDestinationPort = isIncoming ? packetInfo.sourcePort : packetInfo.destinationPort;
 
         if (connectionSource.length > 0 && connectionDestination.length > 0) {
-            NSString *connectionKey = [NSString stringWithFormat:@"%@:%ld->%@:%ld",
-                                       connectionSource, (long)connectionSourcePort,
-                                       connectionDestination, (long)connectionDestinationPort];
+            SNBConnectionKey *connectionKey = [[SNBConnectionKey alloc] initWithSource:connectionSource
+                                                                            sourcePort:connectionSourcePort
+                                                                            destination:connectionDestination
+                                                                        destinationPort:connectionDestinationPort];
             ConnectionTraffic *connection = self.connectionStats[connectionKey];
             if (!connection) {
                 connection = [[ConnectionTraffic alloc] init];
@@ -286,14 +445,15 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
                     }
 
                     if (shouldLookupProcess) {
-                    SNBLogInfo("Process lookup: %@:%ld -> %@:%ld",
-                          connectionSource, (long)connectionSourcePort,
-                          connectionDestination, (long)connectionDestinationPort);
+                        SNBLogDebug("Process lookup: %@:%ld -> %@:%ld",
+                              connectionSource, (long)connectionSourcePort,
+                              connectionDestination, (long)connectionDestinationPort);
                     __weak typeof(self) weakSelf = self;
                     [self performProcessLookup:connectionSource
                                     sourcePort:connectionSourcePort
                                    destination:connectionDestination
                                destinationPort:connectionDestinationPort
+                                   lookupKey:connectionKey
                                     completion:^(ProcessInfo *processInfo) {
                         __strong typeof(weakSelf) strongSelf = weakSelf;
                         if (!strongSelf) return;
@@ -301,7 +461,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
                         dispatch_async(strongSelf.statsQueue, ^{
                             ConnectionTraffic *conn = strongSelf.connectionStats[connectionKey];
                             if (conn && processInfo) {
-                                SNBLogInfo("✓ Found process: %@ (PID %d) for %@:%ld -> %@:%ld",
+                                SNBLogDebug("✓ Found process: %@ (PID %d) for %@:%ld -> %@:%ld",
                                       processInfo.processName, processInfo.pid,
                                       connectionSource, (long)connectionSourcePort,
                                       connectionDestination, (long)connectionDestinationPort);
@@ -309,7 +469,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
                                 conn.processPID = processInfo.pid;
                                 [strongSelf.processCache setObject:processInfo forKey:connectionKey];
                             } else if (conn) {
-                                SNBLogInfo("✗ No process found for connection %@", connectionKey);
+                                SNBLogDebug("✗ No process found for connection %@", [connectionKey stringValue]);
                                 [strongSelf.processCache setObject:[NSNull null] forKey:connectionKey];
                             }
                         });
@@ -317,7 +477,7 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
                     }
                 } else {
                     if (isIncoming) {
-                        SNBLogInfo("Skipping process lookup for incoming connection");
+                        SNBLogDebug("Skipping process lookup for incoming connection");
                     }
                 }
             }
@@ -338,67 +498,19 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
         }
     }
 
-    dispatch_group_t group = dispatch_group_create();
-    dispatch_group_enter(group);
-
-    __block NSString *resultHostname = nil;
-    __block BOOL lookupCompleted = NO;
-
-    void (^finish)(NSString *hostname, BOOL logTimeout) = ^(NSString *hostname, BOOL logTimeout) {
-        @synchronized(lock) {
-            if (lookupCompleted) {
-                return;
-            }
-            lookupCompleted = YES;
-            if (logTimeout) {
-                SNBLogWarn("DNS lookup timeout (%.0fs) for %{" SNB_IP_PRIVACY "}@", kDNSLookupTimeout, address);
-            }
-            resultHostname = hostname;
-            dispatch_group_leave(group);
-            dispatch_semaphore_signal(self.dnsLookupSemaphore);
-        }
-    };
-
-    // Perform DNS lookup on background queue
     dispatch_async(self.dnsLookupQueue, ^{
         dispatch_semaphore_wait(self.dnsLookupSemaphore, DISPATCH_TIME_FOREVER);
-        struct sockaddr_in sin;
-        struct sockaddr_in6 sin6;
-        struct sockaddr *sa;
-        socklen_t salen;
+        BOOL timedOut = NO;
+        NSString *hostname = SNBResolveHostname(address, kDNSLookupTimeout, &timedOut);
+        dispatch_semaphore_signal(self.dnsLookupSemaphore);
 
-        if (inet_pton(AF_INET, address.UTF8String, &sin.sin_addr) == 1) {
-            sin.sin_family = AF_INET;
-            sa = (struct sockaddr *)&sin;
-            salen = sizeof(sin);
-        } else if (inet_pton(AF_INET6, address.UTF8String, &sin6.sin6_addr) == 1) {
-            sin6.sin6_family = AF_INET6;
-            sa = (struct sockaddr *)&sin6;
-            salen = sizeof(sin6);
-        } else {
-            finish(nil, NO);
-            return;
+        if (timedOut) {
+            SNBLogWarn("DNS lookup timeout (%.0fs) for %{" SNB_IP_PRIVACY "}@", kDNSLookupTimeout, address);
         }
 
-        char hostname[NI_MAXHOST];
-        int result = getnameinfo(sa, salen, hostname, NI_MAXHOST, NULL, 0, NI_NAMEREQD);
-
-        if (result == 0) {
-            finish([NSString stringWithUTF8String:hostname], NO);
-            return;
+        if (completion) {
+            completion(hostname);
         }
-        finish(nil, NO);
-    });
-
-    // Set up timeout (5 seconds)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kDNSLookupTimeout * NSEC_PER_SEC)),
-                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        finish(nil, YES);
-    });
-
-    // Wait for completion or timeout, then call completion handler
-    dispatch_group_notify(group, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        completion(resultHostname);
         @synchronized(self.dnsLookupLocks) {
             if (self.dnsLookupLocks[address] == lock) {
                 [self.dnsLookupLocks removeObjectForKey:address];
@@ -411,11 +523,8 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
                   sourcePort:(NSInteger)sourcePort
                  destination:(NSString *)destinationAddress
              destinationPort:(NSInteger)destinationPort
+                   lookupKey:(SNBConnectionKey *)lookupKey
                   completion:(void (^)(ProcessInfo *))completion {
-    // Create unique key for this connection
-    NSString *lookupKey = [NSString stringWithFormat:@"%@:%ld->%@:%ld",
-                           sourceAddress, (long)sourcePort,
-                           destinationAddress, (long)destinationPort];
 
     // Get or create lock for this lookup
     NSObject *lock = nil;
@@ -448,6 +557,62 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
     }];
 }
 
+- (NSArray<HostTraffic *> *)topHostsFromValues:(NSArray<HostTraffic *> *)values limit:(NSUInteger)limit {
+    if (limit == 0 || values.count == 0) {
+        return @[];
+    }
+    NSMutableArray<HostTraffic *> *top = [NSMutableArray arrayWithCapacity:limit];
+    for (HostTraffic *host in values) {
+        if (top.count < limit) {
+            [top addObject:host];
+        } else {
+            HostTraffic *last = top.lastObject;
+            if (host.bytes <= last.bytes) {
+                continue;
+            }
+            top[top.count - 1] = host;
+        }
+        [top sortUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
+            if (obj1.bytes > obj2.bytes) {
+                return NSOrderedAscending;
+            }
+            if (obj1.bytes < obj2.bytes) {
+                return NSOrderedDescending;
+            }
+            return NSOrderedSame;
+        }];
+    }
+    return [top copy];
+}
+
+- (NSArray<ConnectionTraffic *> *)topConnectionsFromValues:(NSArray<ConnectionTraffic *> *)values limit:(NSUInteger)limit {
+    if (limit == 0 || values.count == 0) {
+        return @[];
+    }
+    NSMutableArray<ConnectionTraffic *> *top = [NSMutableArray arrayWithCapacity:limit];
+    for (ConnectionTraffic *connection in values) {
+        if (top.count < limit) {
+            [top addObject:connection];
+        } else {
+            ConnectionTraffic *last = top.lastObject;
+            if (connection.bytes <= last.bytes) {
+                continue;
+            }
+            top[top.count - 1] = connection;
+        }
+        [top sortUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
+            if (obj1.bytes > obj2.bytes) {
+                return NSOrderedAscending;
+            }
+            if (obj1.bytes < obj2.bytes) {
+                return NSOrderedDescending;
+            }
+            return NSOrderedSame;
+        }];
+    }
+    return [top copy];
+}
+
 - (TrafficStats *)currentStatsLocked {
     TrafficStats *stats = [[TrafficStats alloc] init];
     stats.totalBytes = self.totalBytes;
@@ -456,28 +621,14 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
     stats.totalPackets = self.totalPackets;
     stats.bytesPerSecond = self.cachedBytesPerSecond;
 
-    // Use cached sorted results if available and cache is clean
+    // Use cached results if available and cache is clean
     if (self.statsCacheDirty || !self.cachedTopHosts || !self.cachedTopConnections) {
-        // Get top hosts sorted by bytes
-        NSArray<HostTraffic *> *hosts = [self.hostStats.allValues sortedArrayUsingComparator:^NSComparisonResult(HostTraffic *obj1, HostTraffic *obj2) {
-            if (obj1.bytes > obj2.bytes) {
-                return NSOrderedAscending;
-            } else if (obj1.bytes < obj2.bytes) {
-                return NSOrderedDescending;
-            }
-            return NSOrderedSame;
-        }];
-        self.cachedTopHosts = hosts;
+        ConfigurationManager *config = [ConfigurationManager sharedManager];
+        NSUInteger hostLimit = MAX(1, config.maxTopHostsToShow);
+        NSUInteger connectionLimit = MAX(1, config.maxTopConnectionsToShow);
 
-        NSArray<ConnectionTraffic *> *connections = [self.connectionStats.allValues sortedArrayUsingComparator:^NSComparisonResult(ConnectionTraffic *obj1, ConnectionTraffic *obj2) {
-            if (obj1.bytes > obj2.bytes) {
-                return NSOrderedAscending;
-            } else if (obj1.bytes < obj2.bytes) {
-                return NSOrderedDescending;
-            }
-            return NSOrderedSame;
-        }];
-        self.cachedTopConnections = connections;
+        self.cachedTopHosts = [self topHostsFromValues:self.hostStats.allValues limit:hostLimit];
+        self.cachedTopConnections = [self topConnectionsFromValues:self.connectionStats.allValues limit:connectionLimit];
         self.statsCacheDirty = NO;
     }
 

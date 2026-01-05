@@ -182,7 +182,7 @@ static ProcessInfo *SNBFindProcessForConnection(NSString *sourceAddress,
                                                     sourcePort:(NSInteger)sourcePort
                                                    destination:(NSString *)destinationAddress
                                                destinationPort:(NSInteger)destinationPort {
-    SNBLogInfo("ProcessLookup: Looking for %{public}@:%ld -> %{public}@:%ld",
+    SNBLogDebug("ProcessLookup: Looking for %{public}@:%ld -> %{public}@:%ld",
           sourceAddress, (long)sourcePort, destinationAddress, (long)destinationPort);
 
     if (sourcePort <= 0 || destinationPort <= 0) {
@@ -198,12 +198,12 @@ static ProcessInfo *SNBFindProcessForConnection(NSString *sourceAddress,
     });
 
     if (!result) {
-        SNBLogInfo("ProcessLookup: ✗ No matching process found");
+        SNBLogDebug("ProcessLookup: ✗ No matching process found");
         return nil;
     }
 
     result = [self processInfoForPID:result.pid];
-    SNBLogInfo("ProcessLookup: ✓ Found %@ (PID %d)",
+    SNBLogDebug("ProcessLookup: ✓ Found %@ (PID %d)",
           result.processName, result.pid);
     return result;
 }
