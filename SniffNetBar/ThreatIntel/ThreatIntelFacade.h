@@ -42,6 +42,12 @@ typedef void (^TIEnrichmentCompletion)(TIEnrichmentResponse * _Nullable response
 /// Get cache stats
 - (NSDictionary *)cacheStats;
 
+/// Check if any providers are available
+- (BOOL)hasAvailableProviders;
+
+/// Availability message when providers are unavailable
+- (NSString * _Nullable)availabilityMessage;
+
 /// Clear cache
 - (void)clearCache;
 

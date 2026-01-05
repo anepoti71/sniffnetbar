@@ -313,6 +313,11 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
     return value ? [value doubleValue] : 3600.0;
 }
 
+- (NSTimeInterval)threatIntelPersistenceTTLHours {
+    NSNumber *value = self.configuration[@"ThreatIntelPersistenceTTLHours"];
+    return value ? [value doubleValue] : 24.0;
+}
+
 #pragma mark - Explainability Configuration
 
 - (BOOL)explainabilityEnabled {

@@ -52,6 +52,7 @@ extern NSString * const kGreyNoiseAPIKeyIdentifier;
 // Threat Intelligence Configuration
 @property (nonatomic, readonly) NSUInteger threatIntelCacheSize;
 @property (nonatomic, readonly) NSTimeInterval threatIntelCacheTTL;
+@property (nonatomic, readonly) NSTimeInterval threatIntelPersistenceTTLHours;
 
 // Explainability Configuration
 @property (nonatomic, readonly) BOOL explainabilityEnabled;

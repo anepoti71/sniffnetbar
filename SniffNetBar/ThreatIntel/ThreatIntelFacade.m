@@ -5,6 +5,7 @@
 
 #import "ThreatIntelFacade.h"
 #import "ThreatIntelCache.h"
+#import "ThreatIntelStore.h"
 #import "ConfigurationManager.h"
 #import "IPAddressUtilities.h"
 #import "Logger.h"
@@ -12,11 +13,19 @@
 @interface ThreatIntelFacade ()
 @property (nonatomic, strong) NSMutableArray<id<ThreatIntelProvider>> *providers;
 @property (nonatomic, strong) ThreatIntelCache *cache;
+@property (nonatomic, strong) ThreatIntelStore *store;
 @property (nonatomic, strong) dispatch_queue_t enrichmentQueue;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableArray *> *inFlightRequests;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDate *> *providerDisabledUntil;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *providerDisableReasons;
 @end
 
 @implementation ThreatIntelFacade
+
+static NSTimeInterval const kProviderErrorCooldown = 300.0;
+static NSTimeInterval const kProviderRateLimitCooldown = 3600.0;
+static NSTimeInterval const kProviderAuthCooldown = 3600.0;
+static NSString *const kProviderRetryAfterKey = @"retry_after";
 
 + (instancetype)sharedInstance {
     static ThreatIntelFacade *instance = nil;
@@ -32,8 +41,13 @@
     if (self) {
         _providers = [NSMutableArray array];
         _cache = [[ThreatIntelCache alloc] initWithMaxSize:5000];
+        ConfigurationManager *config = [ConfigurationManager sharedManager];
+        NSTimeInterval ttlSeconds = MAX(0.0, config.threatIntelPersistenceTTLHours) * 3600.0;
+        _store = [[ThreatIntelStore alloc] initWithTTLSeconds:ttlSeconds];
         _enrichmentQueue = dispatch_queue_create("com.sniffnetbar.threatintel.enrichment", DISPATCH_QUEUE_CONCURRENT);
         _inFlightRequests = [NSMutableDictionary dictionary];
+        _providerDisabledUntil = [NSMutableDictionary dictionary];
+        _providerDisableReasons = [NSMutableDictionary dictionary];
         _enabled = NO;
     }
     return self;
@@ -109,6 +123,15 @@
     NSDate *startTime = [NSDate date];
     NSString *key = [self keyForIndicator:indicator];
 
+    TIEnrichmentResponse *storedResponse = [self.store responseForIndicator:indicator];
+    if (storedResponse) {
+        for (TIResult *result in storedResponse.providerResults) {
+            [self.cache setResult:result];
+        }
+        [self completeEnrichmentForKey:key response:storedResponse error:nil];
+        return;
+    }
+
     // Get applicable providers
     NSArray<id<ThreatIntelProvider>> *applicableProviders = [self getApplicableProvidersForIndicator:indicator];
 
@@ -123,10 +146,10 @@
     NSMutableArray<NSError *> *errors = [NSMutableArray array];
     __block NSInteger cacheHits = 0;
     __block BOOL timedOut = NO;
+    NSDate *now = [NSDate date];
+    __block NSInteger availableCount = 0;
 
     for (id<ThreatIntelProvider> provider in applicableProviders) {
-        dispatch_group_enter(group);
-
         // Check cache first
         TIResult *cachedResult = [self.cache getResultForProvider:provider.name indicator:indicator];
 
@@ -135,9 +158,20 @@
                 [results addObject:cachedResult];
                 cacheHits++;
             }
-            dispatch_group_leave(group);
             continue;
         }
+
+        BOOL isAvailable = [self isProviderAvailable:provider now:now];
+        if (!isAvailable) {
+            NSError *unavailable = [self errorProviderUnavailableForProvider:provider];
+            @synchronized(results) {
+                [errors addObject:unavailable];
+            }
+            continue;
+        }
+
+        availableCount += 1;
+        dispatch_group_enter(group);
 
         // Query provider
         [provider enrichIndicator:indicator completion:^(TIResult *result, NSError *error) {
@@ -150,6 +184,7 @@
                     }
                 }
             } else if (error) {
+                [self markProviderUnavailable:provider error:error];
                 @synchronized(results) {
                     if (!timedOut) {
                         [errors addObject:error];
@@ -158,6 +193,11 @@
             }
             dispatch_group_leave(group);
         }];
+    }
+
+    if (availableCount == 0 && results.count == 0) {
+        [self completeEnrichmentForKey:key response:nil error:[self errorNoProviders]];
+        return;
     }
 
     // Wait for all providers (with timeout)
@@ -198,6 +238,10 @@
         finalError = [self errorProvidersFailedWithErrors:errorsSnapshot];
     }
 
+    if (response.scoringResult && response.providerResults.count > 0) {
+        [self.store storeResponse:response];
+    }
+
     [self completeEnrichmentForKey:key response:response error:finalError];
 }
 
@@ -226,6 +270,97 @@
         }
     }
     return applicable;
+}
+
+// MARK: - Provider Availability
+
+- (BOOL)hasAvailableProviders {
+    NSDate *now = [NSDate date];
+    for (id<ThreatIntelProvider> provider in self.providers) {
+        if ([provider supportsIndicatorType:TIIndicatorTypeIPv4] ||
+            [provider supportsIndicatorType:TIIndicatorTypeIPv6]) {
+            if ([self isProviderAvailable:provider now:now]) {
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
+- (NSString *)availabilityMessage {
+    if (self.providers.count == 0) {
+        return @"Threat Intel unavailable (no providers configured)";
+    }
+
+    if ([self hasAvailableProviders]) {
+        return nil;
+    }
+
+    NSArray<NSString *> *reasons = [self providerDisableReasonSummaries];
+    if (reasons.count == 0) {
+        return @"Threat Intel unavailable (all providers disabled)";
+    }
+    if (reasons.count == 1) {
+        return [NSString stringWithFormat:@"Threat Intel unavailable (%@)", reasons.firstObject];
+    }
+    return [NSString stringWithFormat:@"Threat Intel unavailable (%lu providers disabled)", (unsigned long)reasons.count];
+}
+
+- (BOOL)isProviderAvailable:(id<ThreatIntelProvider>)provider now:(NSDate *)now {
+    @synchronized(self.providerDisabledUntil) {
+        NSDate *disabledUntil = self.providerDisabledUntil[provider.name];
+        if (!disabledUntil) {
+            return YES;
+        }
+        if ([now compare:disabledUntil] != NSOrderedAscending) {
+            [self.providerDisabledUntil removeObjectForKey:provider.name];
+            [self.providerDisableReasons removeObjectForKey:provider.name];
+            return YES;
+        }
+        return NO;
+    }
+}
+
+- (void)markProviderUnavailable:(id<ThreatIntelProvider>)provider error:(NSError *)error {
+    if (!provider || !error) {
+        return;
+    }
+
+    NSTimeInterval cooldown = kProviderErrorCooldown;
+    NSString *reason = error.localizedDescription.length > 0 ? error.localizedDescription : @"Provider error";
+    NSNumber *retryAfterValue = error.userInfo[kProviderRetryAfterKey];
+
+    if (error.code == TIErrorCodeRateLimited ||
+        error.code == TIErrorCodeQuotaExceeded ||
+        error.code == 429) {
+        cooldown = retryAfterValue ? MAX(1.0, retryAfterValue.doubleValue) : kProviderRateLimitCooldown;
+        reason = @"Rate limit reached";
+    } else if (error.code == TIErrorCodeAuthenticationFailed || error.code == 1003) {
+        cooldown = kProviderAuthCooldown;
+        reason = @"Authentication failed";
+    } else if (retryAfterValue) {
+        cooldown = MAX(1.0, retryAfterValue.doubleValue);
+    }
+
+    NSDate *disabledUntil = [NSDate dateWithTimeIntervalSinceNow:cooldown];
+    @synchronized(self.providerDisabledUntil) {
+        self.providerDisabledUntil[provider.name] = disabledUntil;
+        self.providerDisableReasons[provider.name] = reason;
+    }
+
+    SNBLogThreatIntelWarn("Provider %{public}@ disabled for %.0f seconds (%{public}@)",
+                          provider.name, cooldown, reason);
+}
+
+- (NSArray<NSString *> *)providerDisableReasonSummaries {
+    NSMutableArray<NSString *> *summaries = [NSMutableArray array];
+    @synchronized(self.providerDisabledUntil) {
+        for (NSString *providerName in self.providerDisabledUntil) {
+            NSString *reason = self.providerDisableReasons[providerName] ?: @"Provider unavailable";
+            [summaries addObject:[NSString stringWithFormat:@"%@: %@", providerName, reason]];
+        }
+    }
+    return summaries;
 }
 
 // MARK: - Simple Scoring Engine
@@ -443,6 +578,13 @@
     return [NSError errorWithDomain:TIErrorDomain code:TIErrorCodeNetworkError userInfo:userInfo];
 }
 
+- (NSError *)errorProviderUnavailableForProvider:(id<ThreatIntelProvider>)provider {
+    NSString *message = [NSString stringWithFormat:@"%@ is temporarily unavailable", provider.name];
+    return [NSError errorWithDomain:TIErrorDomain
+                               code:TIErrorCodeProviderUnavailable
+                           userInfo:@{NSLocalizedDescriptionKey: message}];
+}
+
 - (BOOL)isValidIPAddress:(NSString *)ip detectedType:(TIIndicatorType *)detectedType {
     if (!ip || ip.length == 0) {
         return NO;
@@ -474,6 +616,8 @@
     }
     [self.providers removeAllObjects];
     [self.cache clear];
+    [self.providerDisabledUntil removeAllObjects];
+    [self.providerDisableReasons removeAllObjects];
 }
 
 @end

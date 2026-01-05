@@ -170,6 +170,7 @@
         if (strongSelf.menuBuilder.menuIsOpen) {
             [strongSelf.menuBuilder refreshVisualizationWithStats:stats
                                              threatIntelEnabled:strongSelf.threatIntelCoordinator.isEnabled
+                                    threatIntelStatusMessage:[strongSelf.threatIntelCoordinator availabilityMessage]
                                             threatIntelResults:[strongSelf.threatIntelCoordinator resultsSnapshot]
                                                      cacheStats:[strongSelf.threatIntelCoordinator cacheStats]
                                            assetMonitorEnabled:strongSelf.assetMonitor.isEnabled
@@ -206,6 +207,7 @@
                                   devices:self.deviceManager.availableDevices
                            selectedDevice:self.deviceManager.selectedDevice
                        threatIntelEnabled:self.threatIntelCoordinator.isEnabled
+                   threatIntelStatusMessage:[self.threatIntelCoordinator availabilityMessage]
                       threatIntelResults:[self.threatIntelCoordinator resultsSnapshot]
                                cacheStats:[self.threatIntelCoordinator cacheStats]
                        assetMonitorEnabled:self.assetMonitor.isEnabled

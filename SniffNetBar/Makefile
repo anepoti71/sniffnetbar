@@ -43,6 +43,7 @@ NETWORK_SOURCES = Network/PacketCaptureManager.m Network/NetworkDevice.m \
 THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/ThreatIntelProvider.m \
                       ThreatIntel/ThreatIntelCache.m \
+                      ThreatIntel/ThreatIntelStore.m \
                       ThreatIntel/ThreatIntelFacade.m \
                       ThreatIntel/ThreatIntelCoordinator.m \
                       ThreatIntel/Providers/VirusTotalProvider.m \

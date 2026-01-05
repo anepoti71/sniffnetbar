@@ -49,6 +49,8 @@
 	<integer>1000</integer>
 	<key>ThreatIntelCacheTTL</key>
 	<real>3600.0</real>
+	<key>ThreatIntelPersistenceTTLHours</key>
+	<real>24.0</real>
 
 	<!-- Explainability Configuration -->
 	<key>ExplainabilityEnabled</key>

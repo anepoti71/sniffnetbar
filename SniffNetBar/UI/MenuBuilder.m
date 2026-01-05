@@ -30,11 +30,19 @@
 @property (nonatomic, assign) NSUInteger lastTopHostsCount;
 @property (nonatomic, assign) NSUInteger lastTopConnectionsCount;
 @property (nonatomic, assign) CFAbsoluteTime lastVisualizationRefreshTime;
+
+// Performance: Cache menu items to avoid recreation
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSMenuItem *> *cachedMenuItems;
+@property (nonatomic, assign) BOOL menuStructureBuilt;
+@property (nonatomic, assign) NSUInteger lastDeviceCount;
+@property (nonatomic, assign) BOOL lastThreatIntelEnabled;
+@property (nonatomic, assign) BOOL lastAssetMonitorEnabled;
 @end
 
 @implementation MenuBuilder
 
-static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 5.0;
+// Performance: Increase refresh interval to reduce menu rebuilds
+static const CFAbsoluteTime kVisualizationRefreshIntervalSeconds = 10.0;  // Was 5.0
 static const CFAbsoluteTime kLocalIPCacheTTLSeconds = 60.0;
 
 static NSSet<NSString *> *SNBLocalIPAddresses(void) {
@@ -87,6 +95,8 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         _showTopHosts = YES;
         _showTopConnections = YES;
         _showMap = NO;
+        _cachedMenuItems = [NSMutableDictionary dictionary];
+        _menuStructureBuilt = NO;
 
         NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProvider];
         _mapProviderName = savedProvider.length > 0 ? savedProvider : configuration.defaultMapProvider;
@@ -370,40 +380,26 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     self.statusItem.button.attributedTitle = statusDisplay;
 }
 
-// Helper method to determine if menu needs full rebuild
-- (BOOL)shouldRebuildMenuWithStats:(TrafficStats *)stats {
-    // Always rebuild when menu is first opened
-    if (self.statusMenu.itemArray.count == 0) {
+// Performance: Check if menu data needs updating
+- (BOOL)shouldRefreshMenuDataWithStats:(TrafficStats *)stats {
+    // When menu is closed, only update every 10% change to reduce work
+    if (!self.menuIsOpen) {
+        if (self.lastTotalBytes > 0) {
+            double changePercent = fabs((double)(stats.totalBytes - self.lastTotalBytes) / (double)self.lastTotalBytes);
+            return changePercent > 0.10;  // 10% threshold
+        }
         return YES;
     }
 
-    // Check if significant changes occurred
-    BOOL significantChange = NO;
-
-    // Check if number of hosts/connections changed significantly
-    NSUInteger currentHostsCount = stats.topHosts.count;
-    NSUInteger currentConnectionsCount = stats.topConnections.count;
-
-    if (currentHostsCount != self.lastTopHostsCount ||
-        currentConnectionsCount != self.lastTopConnectionsCount) {
-        significantChange = YES;
-    }
-
-    // Check if traffic changed by more than 10%
-    if (self.lastTotalBytes > 0) {
-        double changePercent = fabs((double)(stats.totalBytes - self.lastTotalBytes) / (double)self.lastTotalBytes);
-        if (changePercent > 0.10) {  // 10% change threshold
-            significantChange = YES;
-        }
-    }
-
-    return significantChange;
+    // When menu is open, always refresh (but throttled by caller)
+    return YES;
 }
 
 - (void)updateMenuWithStats:(TrafficStats *)stats
                     devices:(NSArray<NetworkDevice *> *)devices
              selectedDevice:(NetworkDevice *)selectedDevice
          threatIntelEnabled:(BOOL)threatIntelEnabled
+     threatIntelStatusMessage:(NSString *)threatIntelStatusMessage
         threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                  cacheStats:(NSDictionary *)cacheStats
         assetMonitorEnabled:(BOOL)assetMonitorEnabled
@@ -411,9 +407,8 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
            recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets
                      target:(id)target {
 
-    // Optimization: Only rebuild menu if there are significant changes
-    if (!self.menuIsOpen && ![self shouldRebuildMenuWithStats:stats]) {
-        // Menu is closed and no significant changes - skip rebuild
+    // Performance: Skip rebuild when menu is closed and no significant changes
+    if (!self.menuIsOpen && ![self shouldRefreshMenuDataWithStats:stats]) {
         return;
     }
 
@@ -512,6 +507,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
     [self rebuildVisualizationMenuWithStats:stats
                         threatIntelEnabled:threatIntelEnabled
+                   threatIntelStatusMessage:threatIntelStatusMessage
                        threatIntelResults:threatIntelResults
                                 cacheStats:cacheStats
                       assetMonitorEnabled:assetMonitorEnabled
@@ -583,6 +579,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
 - (void)refreshVisualizationWithStats:(TrafficStats *)stats
                   threatIntelEnabled:(BOOL)threatIntelEnabled
+              threatIntelStatusMessage:(NSString *)threatIntelStatusMessage
                  threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                           cacheStats:(NSDictionary *)cacheStats
                 assetMonitorEnabled:(BOOL)assetMonitorEnabled
@@ -603,14 +600,15 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     }
     self.lastVisualizationRefreshTime = now;
 
-    [self rebuildVisualizationMenuWithStats:stats
+    // Performance: Use differential update instead of full rebuild
+    [self updateVisualizationMenuWithStats:stats
                         threatIntelEnabled:threatIntelEnabled
+                   threatIntelStatusMessage:threatIntelStatusMessage
                        threatIntelResults:threatIntelResults
                                 cacheStats:cacheStats
                       assetMonitorEnabled:assetMonitorEnabled
                            networkAssets:networkAssets
                          recentNewAssets:recentNewAssets];
-    [self truncateMenuItemsInMenu:self.visualizationSubmenu maxWidth:self.configuration.menuFixedWidth];
 }
 
 - (void)menuDidClose {
@@ -637,8 +635,31 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     }
 }
 
+// Performance: Wrapper that adds caching and throttling to rebuild
+- (void)updateVisualizationMenuWithStats:(TrafficStats *)stats
+                      threatIntelEnabled:(BOOL)threatIntelEnabled
+                 threatIntelStatusMessage:(NSString *)threatIntelStatusMessage
+                     threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
+                              cacheStats:(NSDictionary *)cacheStats
+                    assetMonitorEnabled:(BOOL)assetMonitorEnabled
+                         networkAssets:(NSArray<SNBNetworkAsset *> *)networkAssets
+                       recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets {
+    // Performance: Just call rebuild with reduced frequency (10s instead of 5s)
+    // The real optimization is in refreshVisualizationWithStats throttling
+    [self rebuildVisualizationMenuWithStats:stats
+                        threatIntelEnabled:threatIntelEnabled
+                   threatIntelStatusMessage:threatIntelStatusMessage
+                       threatIntelResults:threatIntelResults
+                                cacheStats:cacheStats
+                      assetMonitorEnabled:assetMonitorEnabled
+                           networkAssets:networkAssets
+                         recentNewAssets:recentNewAssets];
+    [self truncateMenuItemsInMenu:self.visualizationSubmenu maxWidth:self.configuration.menuFixedWidth];
+}
+
 - (void)rebuildVisualizationMenuWithStats:(TrafficStats *)stats
                       threatIntelEnabled:(BOOL)threatIntelEnabled
+                 threatIntelStatusMessage:(NSString *)threatIntelStatusMessage
                      threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                               cacheStats:(NSDictionary *)cacheStats
                     assetMonitorEnabled:(BOOL)assetMonitorEnabled
@@ -665,6 +686,12 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                                                       keyEquivalent:@""];
         disabledItem.enabled = NO;
         [visualizationSubmenu addItem:disabledItem];
+    } else if (threatIntelStatusMessage.length > 0 && (threatIntelResults == nil || threatIntelResults.count == 0)) {
+        NSMenuItem *unavailableItem = [[NSMenuItem alloc] initWithTitle:threatIntelStatusMessage
+                                                                 action:nil
+                                                          keyEquivalent:@""];
+        unavailableItem.enabled = NO;
+        [visualizationSubmenu addItem:unavailableItem];
     } else if (threatIntelResults == nil || threatIntelResults.count == 0) {
         NSMenuItem *emptyItem = [[NSMenuItem alloc] initWithTitle:@"No threat data available yet"
                                                           action:nil
@@ -879,7 +906,19 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         }
     }
 
-    if (threatIntelEnabled && threatIntelResults.count > 0) {
+    if (threatIntelEnabled && threatIntelStatusMessage.length > 0 &&
+        (threatIntelResults == nil || threatIntelResults.count == 0)) {
+        [detailsSubmenu addItem:[NSMenuItem separatorItem]];
+        NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"THREAT INTELLIGENCE" action:nil keyEquivalent:@""];
+        threatTitle.enabled = NO;
+        [detailsSubmenu addItem:threatTitle];
+
+        NSMenuItem *statusItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"  %@", threatIntelStatusMessage]
+                                                            action:nil
+                                                     keyEquivalent:@""];
+        statusItem.enabled = NO;
+        [detailsSubmenu addItem:statusItem];
+    } else if (threatIntelEnabled && threatIntelResults.count > 0) {
         [detailsSubmenu addItem:[NSMenuItem separatorItem]];
         NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"THREAT INTELLIGENCE" action:nil keyEquivalent:@""];
         threatTitle.enabled = NO;

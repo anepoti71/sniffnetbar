@@ -19,6 +19,7 @@
 - (void)setEnabled:(BOOL)enabled;
 - (NSDictionary<NSString *, TIEnrichmentResponse *> *)resultsSnapshot;
 - (NSDictionary *)cacheStats;
+- (NSString * _Nullable)availabilityMessage;
 - (void)enrichIPIfNeeded:(NSString *)ipAddress completion:(dispatch_block_t)completion;
 
 @end

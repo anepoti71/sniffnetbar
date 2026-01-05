@@ -211,18 +211,19 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
         }
 
         if (httpResponse.statusCode == 429) {
-            SNBLogThreatIntelWarn("Rate limit (429) exceeded for IP: %{" SNB_IP_PRIVACY "}@", indicator.value);
+            SNBLogThreatIntelWarn("Rate limit (429) exceeded for GreyNoise IP: %{" SNB_IP_PRIVACY "}@", indicator.value);
 
             NSString *retryAfterHeader = httpResponse.allHeaderFields[@"Retry-After"];
             NSTimeInterval retryDelay = retryAfterHeader ? [retryAfterHeader doubleValue] : 60.0;
             retryDelay = MIN(retryDelay, 120.0);
 
-            SNBLogThreatIntelInfo("Retrying in %.0f seconds...", retryDelay);
-
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(retryDelay * NSEC_PER_SEC)),
-                           dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                [self performEnrichment:indicator completion:completion];
-            });
+            NSError *rateError = [NSError errorWithDomain:@"GreyNoiseProvider"
+                                                     code:429
+                                                 userInfo:@{
+                                                     NSLocalizedDescriptionKey: @"Rate limit reached",
+                                                     @"retry_after": @(retryDelay)
+                                                 }];
+            if (completion) completion(nil, rateError);
             return;
         }
 

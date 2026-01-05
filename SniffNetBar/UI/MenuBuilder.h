@@ -27,6 +27,7 @@
                     devices:(NSArray<NetworkDevice *> *)devices
              selectedDevice:(NetworkDevice *)selectedDevice
          threatIntelEnabled:(BOOL)threatIntelEnabled
+     threatIntelStatusMessage:(NSString * _Nullable)threatIntelStatusMessage
         threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                  cacheStats:(NSDictionary *)cacheStats
         assetMonitorEnabled:(BOOL)assetMonitorEnabled
@@ -35,6 +36,7 @@
                      target:(id)target;
 - (void)refreshVisualizationWithStats:(TrafficStats *)stats
                   threatIntelEnabled:(BOOL)threatIntelEnabled
+              threatIntelStatusMessage:(NSString * _Nullable)threatIntelStatusMessage
                  threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults
                           cacheStats:(NSDictionary *)cacheStats
                 assetMonitorEnabled:(BOOL)assetMonitorEnabled

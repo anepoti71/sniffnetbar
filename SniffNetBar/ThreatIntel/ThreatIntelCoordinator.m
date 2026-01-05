@@ -137,6 +137,13 @@
     return [self.facade cacheStats];
 }
 
+- (NSString *)availabilityMessage {
+    if (!self.isEnabled) {
+        return nil;
+    }
+    return [self.facade availabilityMessage];
+}
+
 - (void)enrichIPIfNeeded:(NSString *)ipAddress completion:(dispatch_block_t)completion {
     if (!self.isEnabled) {
         return;
@@ -163,9 +170,48 @@
                 });
             }
         } else if (error) {
-            SNBLogThreatIntelWarn("Threat Intel error for %{" SNB_IP_PRIVACY "}@: %{public}@", ipAddress, error.localizedDescription);
+            NSString *provider = [self providerNameFromError:error];
+            if (provider.length > 0) {
+                SNBLogThreatIntelWarn("Threat Intel error for %{" SNB_IP_PRIVACY "}@ (%{public}@): %{public}@",
+                                      ipAddress, provider, error.localizedDescription);
+            } else {
+                SNBLogThreatIntelWarn("Threat Intel error for %{" SNB_IP_PRIVACY "}@: %{public}@", ipAddress, error.localizedDescription);
+            }
         }
     }];
+}
+
+- (NSString *)providerNameFromError:(NSError *)error {
+    if (!error.domain || error.domain.length == 0) {
+        return nil;
+    }
+    if ([error.domain isEqualToString:@"AbuseIPDBProvider"]) {
+        return @"AbuseIPDB";
+    }
+    if ([error.domain isEqualToString:@"VirusTotalProvider"]) {
+        return @"VirusTotal";
+    }
+    if ([error.domain isEqualToString:@"GreyNoiseProvider"]) {
+        return @"GreyNoise";
+    }
+    NSArray<NSError *> *providerErrors = error.userInfo[@"providerErrors"];
+    if ([providerErrors isKindOfClass:[NSArray class]] && providerErrors.count > 0) {
+        NSMutableSet<NSString *> *names = [NSMutableSet set];
+        for (NSError *providerError in providerErrors) {
+            NSString *name = [self providerNameFromError:providerError];
+            if (name.length > 0) {
+                [names addObject:name];
+            }
+        }
+        if (names.count == 1) {
+            return names.anyObject;
+        }
+        if (names.count > 1) {
+            NSArray<NSString *> *sorted = [[names allObjects] sortedArrayUsingSelector:@selector(compare:)];
+            return [sorted componentsJoinedByString:@", "];
+        }
+    }
+    return nil;
 }
 
 @end
