@@ -798,8 +798,26 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
             NSUInteger limit = MIN(3, recentNewAssets.count);
             for (NSUInteger i = 0; i < limit; i++) {
                 SNBNetworkAsset *asset = recentNewAssets[i];
-                NSString *name = asset.hostname.length > 0 ? asset.hostname : asset.ipAddress;
-                NSString *line = [NSString stringWithFormat:@"  %@ (%@)", name, asset.macAddress];
+
+                // Build display name with hostname, vendor, and IP
+                NSString *line;
+                if (asset.hostname.length > 0 && asset.vendor.length > 0) {
+                    // Show: hostname (vendor) - IP
+                    line = [NSString stringWithFormat:@"  %@ (%@) - %@",
+                           asset.hostname, asset.vendor, asset.ipAddress];
+                } else if (asset.hostname.length > 0) {
+                    // Show: hostname - IP
+                    line = [NSString stringWithFormat:@"  %@ - %@",
+                           asset.hostname, asset.ipAddress];
+                } else if (asset.vendor.length > 0) {
+                    // Show: vendor - IP
+                    line = [NSString stringWithFormat:@"  %@ - %@",
+                           asset.vendor, asset.ipAddress];
+                } else {
+                    // Show: IP only
+                    line = [NSString stringWithFormat:@"  %@", asset.ipAddress];
+                }
+
                 NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:line action:nil keyEquivalent:@""];
                 item.enabled = NO;
                 [visualizationSubmenu addItem:item];
@@ -905,10 +923,28 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         NSUInteger limit = MIN(10, networkAssets.count);
         for (NSUInteger i = 0; i < limit; i++) {
             SNBNetworkAsset *asset = networkAssets[i];
-            NSString *name = asset.hostname.length > 0 ? asset.hostname : @"Unknown";
+
+            // Build display name with hostname and vendor
+            NSString *line;
             BOOL isLocal = [localIPs containsObject:asset.ipAddress];
             NSString *suffix = isLocal ? @" (This Mac)" : @"";
-            NSString *line = [NSString stringWithFormat:@"  %@ - %@%@", name, asset.ipAddress, suffix];
+
+            if (asset.hostname.length > 0 && asset.vendor.length > 0) {
+                // Show: hostname (vendor) - IP
+                line = [NSString stringWithFormat:@"  %@ (%@) - %@%@",
+                       asset.hostname, asset.vendor, asset.ipAddress, suffix];
+            } else if (asset.hostname.length > 0) {
+                // Show: hostname - IP
+                line = [NSString stringWithFormat:@"  %@ - %@%@",
+                       asset.hostname, asset.ipAddress, suffix];
+            } else if (asset.vendor.length > 0) {
+                // Show: vendor - IP
+                line = [NSString stringWithFormat:@"  %@ - %@%@",
+                       asset.vendor, asset.ipAddress, suffix];
+            } else {
+                // Show: IP only (no duplicate)
+                line = [NSString stringWithFormat:@"  %@%@", asset.ipAddress, suffix];
+            }
             NSMenuItem *assetItem = [[NSMenuItem alloc] initWithTitle:line action:nil keyEquivalent:@""];
             assetItem.enabled = NO;
             [detailsSubmenu addItem:assetItem];

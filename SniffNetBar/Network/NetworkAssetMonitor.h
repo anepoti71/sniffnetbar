@@ -13,6 +13,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *ipAddress;
 @property (nonatomic, copy) NSString *macAddress;
 @property (nonatomic, copy) NSString *hostname;
+@property (nonatomic, copy) NSString *vendor;
+@property (nonatomic, copy, nullable) NSString *bonjourName;
+@property (nonatomic, copy, nullable) NSString *deviceInfo;
 @property (nonatomic, strong) NSDate *lastSeen;
 @property (nonatomic, assign) BOOL isNew;
 @end
