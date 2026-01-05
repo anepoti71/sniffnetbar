@@ -54,6 +54,9 @@ extern NSString * const kGreyNoiseAPIKeyIdentifier;
 @property (nonatomic, readonly) NSTimeInterval threatIntelCacheTTL;
 @property (nonatomic, readonly) NSTimeInterval threatIntelPersistenceTTLHours;
 
+// About Configuration
+@property (nonatomic, readonly) NSString *appVersion;
+
 // Explainability Configuration
 @property (nonatomic, readonly) BOOL explainabilityEnabled;
 @property (nonatomic, readonly) NSString *explainabilityOllamaBaseURL;

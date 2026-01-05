@@ -52,6 +52,10 @@
 	<key>ThreatIntelPersistenceTTLHours</key>
 	<real>24.0</real>
 
+	<!-- About Configuration -->
+	<key>AppVersion</key>
+	<string>1.0.0</string>
+
 	<!-- Explainability Configuration -->
 	<key>ExplainabilityEnabled</key>
 	<true/>

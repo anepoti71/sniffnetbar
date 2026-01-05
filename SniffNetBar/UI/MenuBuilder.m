@@ -445,6 +445,23 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     deviceMenu.submenu = deviceSubmenu;
     [settingsSubmenu addItem:deviceMenu];
+    NSMenuItem *providerItem = [[NSMenuItem alloc] initWithTitle:@"GeoLocation Provider" action:nil keyEquivalent:@""];
+    NSMenu *providerSubmenu = [[NSMenu alloc] init];
+    NSArray<NSString *> *providers = @[@"ip-api.com", @"ipinfo.io", @"Custom (UserDefaults)"];
+    for (NSString *provider in providers) {
+        NSMenuItem *providerMenuItem = [[NSMenuItem alloc] initWithTitle:provider
+                                                                  action:@selector(selectMapProvider:)
+                                                           keyEquivalent:@""];
+        providerMenuItem.target = target;
+        providerMenuItem.representedObject = provider;
+        NSString *providerValue = [provider isEqualToString:@"Custom (UserDefaults)"] ? @"custom" : provider;
+        if ([self.mapProviderName isEqualToString:providerValue]) {
+            providerMenuItem.state = NSControlStateValueOn;
+        }
+        [providerSubmenu addItem:providerMenuItem];
+    }
+    providerItem.submenu = providerSubmenu;
+    [settingsSubmenu addItem:providerItem];
     [settingsSubmenu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *toggleHosts = [[NSMenuItem alloc] initWithTitle:@"Show Top Hosts"
@@ -481,24 +498,6 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     toggleAssetMonitor.state = assetMonitorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [settingsSubmenu addItem:toggleAssetMonitor];
 
-    NSMenuItem *providerItem = [[NSMenuItem alloc] initWithTitle:@"GeoLocation Provider" action:nil keyEquivalent:@""];
-    NSMenu *providerSubmenu = [[NSMenu alloc] init];
-    NSArray<NSString *> *providers = @[@"ip-api.com", @"ipinfo.io", @"Custom (UserDefaults)"];
-    for (NSString *provider in providers) {
-        NSMenuItem *providerMenuItem = [[NSMenuItem alloc] initWithTitle:provider
-                                                                  action:@selector(selectMapProvider:)
-                                                           keyEquivalent:@""];
-        providerMenuItem.target = target;
-        providerMenuItem.representedObject = provider;
-        NSString *providerValue = [provider isEqualToString:@"Custom (UserDefaults)"] ? @"custom" : provider;
-        if ([self.mapProviderName isEqualToString:providerValue]) {
-            providerMenuItem.state = NSControlStateValueOn;
-        }
-        [providerSubmenu addItem:providerMenuItem];
-    }
-    providerItem.submenu = providerSubmenu;
-    [settingsSubmenu addItem:providerItem];
-
     NSMenuItem *visualizationItem = [[NSMenuItem alloc] initWithTitle:@"Visualization" action:nil keyEquivalent:@""];
     NSMenu *visualizationSubmenu = [[NSMenu alloc] init];
     visualizationItem.submenu = visualizationSubmenu;
@@ -513,6 +512,16 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                       assetMonitorEnabled:assetMonitorEnabled
                            networkAssets:networkAssets
                          recentNewAssets:recentNewAssets];
+
+    [self.statusMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *aboutItem = [[NSMenuItem alloc] initWithTitle:@"About" action:nil keyEquivalent:@""];
+    NSMenu *aboutSubmenu = [[NSMenu alloc] init];
+    NSString *versionTitle = [NSString stringWithFormat:@"Version %@", config.appVersion];
+    NSMenuItem *versionItem = [[NSMenuItem alloc] initWithTitle:versionTitle action:nil keyEquivalent:@""];
+    versionItem.enabled = NO;
+    [aboutSubmenu addItem:versionItem];
+    aboutItem.submenu = aboutSubmenu;
+    [self.statusMenu addItem:aboutItem];
 
     [self.statusMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *quitItem = [[NSMenuItem alloc] initWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];

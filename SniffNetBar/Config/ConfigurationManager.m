@@ -318,6 +318,17 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
     return value ? [value doubleValue] : 24.0;
 }
 
+#pragma mark - About Configuration
+
+- (NSString *)appVersion {
+    NSString *value = self.configuration[@"AppVersion"];
+    if (value.length > 0) {
+        return value;
+    }
+    NSString *bundleVersion = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    return bundleVersion.length > 0 ? bundleVersion : @"1.0.0";
+}
+
 #pragma mark - Explainability Configuration
 
 - (BOOL)explainabilityEnabled {

@@ -161,6 +161,7 @@ dmg: $(APP_BUNDLE)
 run: $(APP_BUNDLE)
 	@echo "Running $(APP_NAME)..."
 	@echo "The application will request root privileges on startup."
+	@pkill -x $(APP_NAME) >/dev/null 2>&1 || true
 	open $(APP_BUNDLE)
 
 # Test targets
