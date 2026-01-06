@@ -22,7 +22,7 @@
 #import "NetworkAssetMonitor.h"
 #import "UserDefaultsKeys.h"
 
-@interface AppCoordinator ()
+@interface AppCoordinator () <MenuBuilderDelegate>
 @property (nonatomic, strong, readwrite) TrafficStatistics *statistics;
 @property (nonatomic, strong, readwrite) DeviceManager *deviceManager;
 @property (nonatomic, strong, readwrite) MenuBuilder *menuBuilder;
@@ -58,6 +58,7 @@
         _menuBuilder = [[MenuBuilder alloc] initWithMenu:statusMenu
                                               statusItem:statusItem
                                            configuration:_configuration];
+        _menuBuilder.delegate = self;
         _threatIntelCoordinator = [[ThreatIntelCoordinator alloc] initWithConfiguration:_configuration];
         _anomalyDetector = [[SNBAnomalyDetector alloc] initWithWindowSeconds:60.0];
         _anomalyExplainabilityCoordinator = [[SNBAnomalyExplainabilityCoordinator alloc]
@@ -279,6 +280,26 @@
 
 - (void)menuDidClose {
     [self.menuBuilder menuDidClose];
+}
+
+#pragma mark - MenuBuilderDelegate
+
+- (void)menuBuilderNeedsVisualizationRefresh:(id)sender {
+    __weak typeof(self) weakSelf = self;
+    [self.statistics getCurrentStatsWithCompletion:^(TrafficStats *stats) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.menuBuilder.menuIsOpen) {
+            return;
+        }
+        [strongSelf.menuBuilder refreshVisualizationWithStats:stats
+                                         threatIntelEnabled:strongSelf.threatIntelCoordinator.isEnabled
+                                   threatIntelStatusMessage:[strongSelf.threatIntelCoordinator availabilityMessage]
+                                       threatIntelResults:[strongSelf.threatIntelCoordinator resultsSnapshot]
+                                                cacheStats:[strongSelf.threatIntelCoordinator cacheStats]
+                                      assetMonitorEnabled:strongSelf.assetMonitor.isEnabled
+                                           networkAssets:[strongSelf.assetMonitor assetsSnapshot]
+                                         recentNewAssets:[strongSelf.assetMonitor recentNewAssetsSnapshot]];
+    }];
 }
 
 #pragma mark - Menu refresh

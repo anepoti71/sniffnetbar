@@ -11,13 +11,24 @@
 @class TIEnrichmentResponse;
 @class SNBNetworkAsset;
 
+@protocol MenuBuilderDelegate <NSObject>
+- (void)menuBuilderNeedsVisualizationRefresh:(id)sender;
+@end
+
 @interface MenuBuilder : NSObject
+
+@property (nonatomic, weak) id<MenuBuilderDelegate> delegate;
 
 @property (nonatomic, assign) BOOL showTopHosts;
 @property (nonatomic, assign) BOOL showTopConnections;
 @property (nonatomic, assign) BOOL showMap;
 @property (nonatomic, copy, readonly) NSString *mapProviderName;
 @property (nonatomic, assign, readonly) BOOL menuIsOpen;
+
+// Expandable sections state
+@property (nonatomic, assign) BOOL showCleanConnections;
+@property (nonatomic, assign) BOOL showAllAssets;
+@property (nonatomic, assign) BOOL showProviderDetails;
 
 - (instancetype)initWithMenu:(NSMenu *)menu
                   statusItem:(NSStatusItem *)statusItem
@@ -45,5 +56,10 @@
 - (void)menuWillOpenWithStats:(TrafficStats *)stats;
 - (void)menuDidClose;
 - (void)selectMapProviderWithName:(NSString *)providerName stats:(TrafficStats *)stats;
+
+// Expandable section toggles
+- (void)toggleShowCleanConnections;
+- (void)toggleShowAllAssets;
+- (void)toggleShowProviderDetails;
 
 @end
