@@ -24,6 +24,7 @@
 
 static NSTimeInterval const kProviderErrorCooldown = 300.0;
 static NSTimeInterval const kProviderRateLimitCooldown = 3600.0;
+static NSTimeInterval const kProviderQuotaCooldown = 86400.0;  // 24 hours for quota exceeded
 static NSTimeInterval const kProviderAuthCooldown = 3600.0;
 static NSString *const kProviderRetryAfterKey = @"retry_after";
 
@@ -49,6 +50,8 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
         _providerDisabledUntil = [NSMutableDictionary dictionary];
         _providerDisableReasons = [NSMutableDictionary dictionary];
         _enabled = NO;
+        [self loadProviderStatusesFromStore];
+        [self.store clearExpiredProviderStatuses];
     }
     return self;
 }
@@ -238,6 +241,7 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
         finalError = [self errorProvidersFailedWithErrors:errorsSnapshot];
     }
 
+    // Store to database (storeResponse handles async via dbQueue internally)
     if (response.scoringResult && response.providerResults.count > 0) {
         [self.store storeResponse:response];
     }
@@ -313,11 +317,48 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
             return YES;
         }
         if ([now compare:disabledUntil] != NSOrderedAscending) {
+            // Provider cooldown has expired - re-enable it
             [self.providerDisabledUntil removeObjectForKey:provider.name];
             [self.providerDisableReasons removeObjectForKey:provider.name];
+            [self.store clearProviderStatus:provider.name];
+            SNBLogThreatIntelInfo("Provider %{public}@ re-enabled after cooldown", provider.name);
             return YES;
         }
         return NO;
+    }
+}
+
+- (void)loadProviderStatusesFromStore {
+    NSDictionary<NSString *, SNBProviderStatus *> *statuses = [self.store getAllProviderStatuses];
+    NSDate *now = [NSDate date];
+    NSInteger loadedCount = 0;
+
+    for (NSString *providerName in statuses) {
+        SNBProviderStatus *status = statuses[providerName];
+
+        // Check if still disabled
+        if (status.isDisabled && status.disabledUntil) {
+            if ([now compare:status.disabledUntil] == NSOrderedAscending) {
+                // Still disabled
+                @synchronized(self.providerDisabledUntil) {
+                    self.providerDisabledUntil[providerName] = status.disabledUntil;
+                    self.providerDisableReasons[providerName] = status.disabledReason ?: @"Provider error";
+                }
+                loadedCount++;
+
+                NSTimeInterval remaining = [status.disabledUntil timeIntervalSinceDate:now];
+                SNBLogThreatIntelWarn("Loaded persistent provider status: %{public}@ disabled for %.0f more seconds - %{public}@",
+                                     providerName, remaining, status.disabledReason ?: @"Unknown reason");
+            } else {
+                // Expired - clear from database
+                [self.store clearProviderStatus:providerName];
+                SNBLogThreatIntelInfo("Provider %{public}@ disabled status expired - re-enabled", providerName);
+            }
+        }
+    }
+
+    if (loadedCount > 0) {
+        SNBLogThreatIntelInfo("Loaded %ld provider disabled states from persistent storage", (long)loadedCount);
     }
 }
 
@@ -329,17 +370,31 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
     NSTimeInterval cooldown = kProviderErrorCooldown;
     NSString *reason = error.localizedDescription.length > 0 ? error.localizedDescription : @"Provider error";
     NSNumber *retryAfterValue = error.userInfo[kProviderRetryAfterKey];
+    BOOL isQuotaExceeded = NO;
 
-    if (error.code == TIErrorCodeRateLimited ||
-        error.code == TIErrorCodeQuotaExceeded ||
-        error.code == 429) {
+    // Differentiate between quota exceeded and rate limit
+    if (error.code == TIErrorCodeQuotaExceeded) {
+        // Quota exceeded - disable for 24 hours (until quota resets)
+        cooldown = kProviderQuotaCooldown;
+        reason = @"Daily quota exceeded";
+        isQuotaExceeded = YES;
+        SNBLogThreatIntelError("Provider %{public}@ QUOTA EXCEEDED - disabled until quota resets (24h)", provider.name);
+    } else if (error.code == TIErrorCodeRateLimited || error.code == 429) {
+        // Rate limited - temporary cooldown
         cooldown = retryAfterValue ? MAX(1.0, retryAfterValue.doubleValue) : kProviderRateLimitCooldown;
-        reason = @"Rate limit reached";
+        reason = @"Rate limit reached (temporary)";
+        SNBLogThreatIntelWarn("Provider %{public}@ rate limited - cooldown for %.0f seconds", provider.name, cooldown);
     } else if (error.code == TIErrorCodeAuthenticationFailed || error.code == 1003) {
         cooldown = kProviderAuthCooldown;
-        reason = @"Authentication failed";
+        reason = @"Authentication failed (check API key)";
+        SNBLogThreatIntelError("Provider %{public}@ authentication failed - check API key", provider.name);
     } else if (retryAfterValue) {
         cooldown = MAX(1.0, retryAfterValue.doubleValue);
+        SNBLogThreatIntelWarn("Provider %{public}@ error - retry after %.0f seconds: %{public}@",
+                            provider.name, cooldown, error.localizedDescription);
+    } else {
+        SNBLogThreatIntelWarn("Provider %{public}@ error (cooldown %.0f seconds): %{public}@",
+                            provider.name, cooldown, error.localizedDescription);
     }
 
     NSDate *disabledUntil = [NSDate dateWithTimeIntervalSinceNow:cooldown];
@@ -348,8 +403,23 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
         self.providerDisableReasons[provider.name] = reason;
     }
 
-    SNBLogThreatIntelWarn("Provider %{public}@ disabled for %.0f seconds (%{public}@)",
-                          provider.name, cooldown, reason);
+    // Persist to database for persistence across app restarts
+    SNBProviderStatus *status = [[SNBProviderStatus alloc] init];
+    status.providerName = provider.name;
+    status.isDisabled = YES;
+    status.disabledUntil = disabledUntil;
+    status.disabledReason = reason;
+    status.errorCode = error.code;
+    status.lastUpdated = [NSDate date];
+    [self.store saveProviderStatus:status];
+
+    if (isQuotaExceeded) {
+        SNBLogThreatIntelError("Provider %{public}@ disabled until %{public}@ - reason: %{public}@",
+                              provider.name, disabledUntil.description, reason);
+    } else {
+        SNBLogThreatIntelWarn("Provider %{public}@ disabled until %{public}@ - reason: %{public}@",
+                              provider.name, disabledUntil.description, reason);
+    }
 }
 
 - (NSArray<NSString *> *)providerDisableReasonSummaries {
@@ -446,14 +516,22 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
     scoring.breakdown = breakdown;
     scoring.finalScore = totalScore;
 
-    // Calculate confidence
+    // Calculate confidence from ALL provider results, not just those with hits
     double avgConfidence = 0.0;
-    if (confidences.count > 0) {
+    if (results.count > 0) {
         double sum = 0.0;
-        for (NSNumber *c in confidences) {
-            sum += [c doubleValue];
+        NSInteger validCount = 0;
+        for (TIResult *result in results) {
+            // Include all provider confidences, even if they didn't report a hit
+            // This gives us an overall confidence in the assessment
+            if (result.verdict) {
+                sum += (result.verdict.confidence / 100.0);
+                validCount++;
+            }
         }
-        avgConfidence = sum / confidences.count;
+        if (validCount > 0) {
+            avgConfidence = sum / validCount;
+        }
     }
     scoring.confidence = avgConfidence;
 
@@ -470,6 +548,10 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
 
     // Generate explanation
     scoring.explanation = [self generateExplanationForScoring:scoring];
+
+    // Debug logging to track scoring calculation
+    SNBLogThreatIntelDebug("Calculated scoring - score=%ld, confidence=%.2f, verdict=%{public}@, results=%lu",
+                           (long)scoring.finalScore, scoring.confidence, [scoring verdictString], (unsigned long)results.count);
 
     return scoring;
 }

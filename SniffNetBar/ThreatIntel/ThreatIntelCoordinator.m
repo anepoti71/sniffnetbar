@@ -161,8 +161,23 @@
             self.results[ipAddress] = response;
 
             TIScoringResult *scoring = response.scoringResult;
-            SNBLogThreatIntelInfo("Threat Intel: %{" SNB_IP_PRIVACY "}@ -> %{public}@ (score: %ld, confidence: %.2f)",
-                                  ipAddress, [scoring verdictString], (long)scoring.finalScore, scoring.confidence);
+            // Validate scoring result before logging
+            if (scoring && scoring.indicator) {
+                NSInteger score = scoring.finalScore;
+                double confidence = scoring.confidence;
+                NSString *verdict = [scoring verdictString];
+
+                // Sanity check the values
+                if (score < 0 || score > 10000) {
+                    SNBLogThreatIntelError("Invalid threat intel score for %{" SNB_IP_PRIVACY "}@: %ld (corrupted data)",
+                                          ipAddress, (long)score);
+                } else {
+                    SNBLogThreatIntelInfo("Threat Intel: %{" SNB_IP_PRIVACY "}@ -> %{public}@ (score: %ld, confidence: %.2f)",
+                                          ipAddress, verdict ?: @"Unknown", (long)score, confidence);
+                }
+            } else {
+                SNBLogThreatIntelWarn("Threat Intel: %{" SNB_IP_PRIVACY "}@ -> incomplete scoring result", ipAddress);
+            }
 
             if (completion) {
                 dispatch_async(dispatch_get_main_queue(), ^{

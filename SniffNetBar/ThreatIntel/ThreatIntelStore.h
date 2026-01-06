@@ -10,6 +10,15 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@interface SNBProviderStatus : NSObject
+@property (nonatomic, copy) NSString *providerName;
+@property (nonatomic, assign) BOOL isDisabled;
+@property (nonatomic, strong, nullable) NSDate *disabledUntil;
+@property (nonatomic, copy, nullable) NSString *disabledReason;
+@property (nonatomic, assign) NSInteger errorCode;
+@property (nonatomic, strong, nullable) NSDate *lastUpdated;
+@end
+
 @interface ThreatIntelStore : NSObject
 
 - (instancetype)initWithTTLSeconds:(NSTimeInterval)ttlSeconds;
@@ -22,6 +31,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Remove expired entries.
 - (void)purgeExpired;
+
+/// Provider status management
+- (void)saveProviderStatus:(SNBProviderStatus *)status;
+- (SNBProviderStatus * _Nullable)getProviderStatus:(NSString *)providerName;
+- (NSDictionary<NSString *, SNBProviderStatus *> *)getAllProviderStatuses;
+- (void)clearProviderStatus:(NSString *)providerName;
+- (void)clearExpiredProviderStatuses;
 
 @end
 

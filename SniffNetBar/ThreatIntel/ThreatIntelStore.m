@@ -9,6 +9,9 @@
 #import "Logger.h"
 #import <sqlite3.h>
 
+@implementation SNBProviderStatus
+@end
+
 @interface ThreatIntelStore ()
 @property (nonatomic, assign) sqlite3 *db;
 @property (nonatomic, assign) NSTimeInterval ttlSeconds;
@@ -37,27 +40,37 @@
 
 - (TIEnrichmentResponse *)responseForIndicator:(TIIndicator *)indicator {
     if (!indicator || !self.db) {
+        SNBLogThreatIntelDebug("responseForIndicator called with invalid parameters (indicator=%p, db=%p)",
+                              indicator, self.db);
         return nil;
     }
+
+    SNBLogThreatIntelDebug("Checking database cache for %{" SNB_IP_PRIVACY "}@", indicator.value);
 
     __block TIEnrichmentResponse *response = nil;
     dispatch_sync(self.dbQueue, ^{
         const char *sql = "SELECT response_json, expires_at FROM threat_intel_cache "
                           "WHERE indicator_type = ? AND ip = ? LIMIT 1;";
+
         sqlite3_stmt *stmt = NULL;
         if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-            SNBLogThreatIntelWarn("ThreatIntelStore query prepare failed: %s", sqlite3_errmsg(self.db));
+            SNBLogThreatIntelError("SELECT prepare failed: %s", sqlite3_errmsg(self.db));
             return;
         }
 
         sqlite3_bind_int(stmt, 1, (int)indicator.type);
         sqlite3_bind_text(stmt, 2, indicator.value.UTF8String, -1, SQLITE_TRANSIENT);
 
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
+        int stepResult = sqlite3_step(stmt);
+        if (stepResult == SQLITE_ROW) {
             const unsigned char *jsonText = sqlite3_column_text(stmt, 0);
             sqlite3_int64 expiresAt = sqlite3_column_int64(stmt, 1);
             NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+            NSTimeInterval remainingSeconds = (NSTimeInterval)expiresAt - now;
+
             if (expiresAt > 0 && now > (NSTimeInterval)expiresAt) {
+                SNBLogThreatIntelInfo("⊗ Cache EXPIRED for %{" SNB_IP_PRIVACY "}@ (expired %.0f seconds ago) - deleting",
+                                     indicator.value, -remainingSeconds);
                 sqlite3_finalize(stmt);
                 [self deleteIndicatorLocked:indicator];
                 return;
@@ -65,8 +78,22 @@
 
             if (jsonText) {
                 NSString *jsonString = [NSString stringWithUTF8String:(const char *)jsonText];
+                size_t jsonSize = strlen((const char *)jsonText);
                 response = [self responseFromJSONString:jsonString];
+                if (response) {
+                    SNBLogThreatIntelInfo("✓ Cache HIT for %{" SNB_IP_PRIVACY "}@ from DATABASE (expires in %.0f hours, json_size: %lu bytes)",
+                                         indicator.value, remainingSeconds / 3600.0, (unsigned long)jsonSize);
+                } else {
+                    SNBLogThreatIntelError("Failed to deserialize cached result for %{" SNB_IP_PRIVACY "}@",
+                                          indicator.value);
+                }
             }
+        } else if (stepResult == SQLITE_DONE) {
+            SNBLogThreatIntelInfo("⊗ Cache MISS for %{" SNB_IP_PRIVACY "}@ - not in database",
+                                 indicator.value);
+        } else {
+            SNBLogThreatIntelError("SELECT failed for %{" SNB_IP_PRIVACY "}@: %s (code: %d)",
+                                  indicator.value, sqlite3_errmsg(self.db), stepResult);
         }
 
         sqlite3_finalize(stmt);
@@ -77,38 +104,66 @@
 
 - (void)storeResponse:(TIEnrichmentResponse *)response {
     if (!response || !response.indicator || !self.db) {
+        SNBLogThreatIntelWarn("storeResponse called with invalid parameters (response=%p, indicator=%p, db=%p)",
+                             response, response ? response.indicator : NULL, self.db);
         return;
     }
 
     NSString *jsonString = [self jsonStringFromResponse:response];
     if (jsonString.length == 0) {
+        SNBLogThreatIntelWarn("Failed to serialize response for %{" SNB_IP_PRIVACY "}@",
+                             response.indicator.value);
         return;
     }
 
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     NSTimeInterval expiresAt = now + self.ttlSeconds;
 
+    NSString *ipAddress = response.indicator.value;
+    TIIndicatorType indicatorType = response.indicator.type;
+
+    SNBLogThreatIntelInfo("Storing threat intel result to database: %{" SNB_IP_PRIVACY "}@ (TTL: %.0f hours)",
+                         ipAddress, self.ttlSeconds / 3600.0);
+
     dispatch_async(self.dbQueue, ^{
+        // Use autocommit mode with WAL - no explicit transaction needed
+        // WAL mode allows concurrent reads during writes
         const char *sql =
             "INSERT OR REPLACE INTO threat_intel_cache "
             "(ip, indicator_type, evaluated_at, expires_at, response_json) "
             "VALUES (?, ?, ?, ?, ?);";
+
+        SNBLogThreatIntelDebug("Executing INSERT for %{" SNB_IP_PRIVACY "}@ [type=%d, now=%lld, expires=%lld, ttl_hours=%.1f]",
+                              ipAddress, (int)indicatorType,
+                              (sqlite3_int64)now, (sqlite3_int64)expiresAt,
+                              self.ttlSeconds / 3600.0);
+
         sqlite3_stmt *stmt = NULL;
         if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-            SNBLogThreatIntelWarn("ThreatIntelStore insert prepare failed: %s", sqlite3_errmsg(self.db));
+            SNBLogThreatIntelError("INSERT prepare failed: %s", sqlite3_errmsg(self.db));
             return;
         }
 
-        sqlite3_bind_text(stmt, 1, response.indicator.value.UTF8String, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 2, (int)response.indicator.type);
+        sqlite3_bind_text(stmt, 1, ipAddress.UTF8String, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, (int)indicatorType);
         sqlite3_bind_int64(stmt, 3, (sqlite3_int64)now);
         sqlite3_bind_int64(stmt, 4, (sqlite3_int64)expiresAt);
         sqlite3_bind_text(stmt, 5, jsonString.UTF8String, -1, SQLITE_TRANSIENT);
 
-        if (sqlite3_step(stmt) != SQLITE_DONE) {
-            SNBLogThreatIntelWarn("ThreatIntelStore insert failed: %s", sqlite3_errmsg(self.db));
-        }
+        int result = sqlite3_step(stmt);
+        int lastInsertRowId = (int)sqlite3_last_insert_rowid(self.db);
         sqlite3_finalize(stmt);
+
+        if (result == SQLITE_DONE) {
+            SNBLogThreatIntelInfo("✓ Successfully stored %{" SNB_IP_PRIVACY "}@ to database (rowid: %d, json_size: %lu bytes)",
+                                  ipAddress, lastInsertRowId, (unsigned long)jsonString.length);
+        } else if (result == SQLITE_BUSY || result == SQLITE_LOCKED) {
+            SNBLogThreatIntelError("INSERT failed - database locked for %{" SNB_IP_PRIVACY "}@: %s (code: %d)",
+                                  ipAddress, sqlite3_errmsg(self.db), result);
+        } else {
+            SNBLogThreatIntelError("INSERT failed for %{" SNB_IP_PRIVACY "}@: %s (code: %d)",
+                                  ipAddress, sqlite3_errmsg(self.db), result);
+        }
     });
 }
 
@@ -134,16 +189,19 @@
 - (void)openDatabase {
     NSString *path = [[self class] defaultDatabasePath];
 
+    SNBLogThreatIntelInfo("Opening threat intel database at: %{public}@", path);
+
     NSString *directory = [path stringByDeletingLastPathComponent];
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:directory]) {
         [fm createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
+        SNBLogThreatIntelDebug("Created database directory: %{public}@", directory);
     }
 
-    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
     int result = sqlite3_open_v2([path fileSystemRepresentation], &_db, flags, NULL);
     if (result != SQLITE_OK) {
-        SNBLogThreatIntelWarn("Failed to open threat intel db at %{public}@: %s",
+        SNBLogThreatIntelError("Failed to open threat intel db at %{public}@: %s",
                               path, sqlite3_errmsg(self.db));
         if (self.db) {
             sqlite3_close(self.db);
@@ -152,9 +210,35 @@
         return;
     }
 
+    SNBLogThreatIntelInfo("Database opened successfully");
+
+    // Enable WAL mode for better concurrent access
     sqlite3_exec(self.db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+
+    // Verify WAL mode was set
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(self.db, "PRAGMA journal_mode;", -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *mode = sqlite3_column_text(stmt, 0);
+            SNBLogThreatIntelInfo("Journal mode: %s", mode ? (const char *)mode : "unknown");
+        }
+        sqlite3_finalize(stmt);
+    }
+
     sqlite3_exec(self.db, "PRAGMA synchronous=NORMAL;", NULL, NULL, NULL);
-    sqlite3_busy_timeout(self.db, 2000);
+    SNBLogThreatIntelDebug("Set synchronous=NORMAL");
+
+    // Increase busy timeout to handle concurrent writes (30 seconds)
+    sqlite3_busy_timeout(self.db, 30000);
+    SNBLogThreatIntelDebug("Set busy timeout to 30000ms");
+
+    // Enable memory-mapped I/O for better performance
+    sqlite3_exec(self.db, "PRAGMA mmap_size=268435456;", NULL, NULL, NULL);  // 256MB
+    SNBLogThreatIntelDebug("Set mmap_size to 256MB");
+
+    // Increase cache size for better performance
+    sqlite3_exec(self.db, "PRAGMA cache_size=-8000;", NULL, NULL, NULL);  // 8MB cache
+    SNBLogThreatIntelDebug("Set cache_size to 8MB");
 }
 
 - (void)ensureSchema {
@@ -173,6 +257,19 @@
         ");";
     sqlite3_exec(self.db, createTable, NULL, NULL, NULL);
     sqlite3_exec(self.db, "CREATE INDEX IF NOT EXISTS idx_threat_intel_expires ON threat_intel_cache (expires_at);",
+                 NULL, NULL, NULL);
+
+    const char *createProviderStatusTable =
+        "CREATE TABLE IF NOT EXISTS provider_status ("
+        "provider_name TEXT PRIMARY KEY, "
+        "is_disabled INTEGER NOT NULL DEFAULT 0, "
+        "disabled_until INTEGER, "
+        "disabled_reason TEXT, "
+        "error_code INTEGER, "
+        "last_updated INTEGER NOT NULL"
+        ");";
+    sqlite3_exec(self.db, createProviderStatusTable, NULL, NULL, NULL);
+    sqlite3_exec(self.db, "CREATE INDEX IF NOT EXISTS idx_provider_disabled_until ON provider_status (disabled_until);",
                  NULL, NULL, NULL);
 }
 
@@ -207,6 +304,15 @@
     if (!dict) {
         return nil;
     }
+
+    // Debug logging before serialization
+    if (response.scoringResult) {
+        SNBLogThreatIntelDebug("Serializing scoring - score=%ld, confidence=%.2f, verdict=%ld",
+                              (long)response.scoringResult.finalScore,
+                              response.scoringResult.confidence,
+                              (long)response.scoringResult.verdict);
+    }
+
     NSError *error = nil;
     NSData *data = [NSJSONSerialization dataWithJSONObject:dict options:0 error:&error];
     if (!data || error) {
@@ -414,9 +520,42 @@
     NSNumber *evaluatedAt = dict[@"evaluated_at"];
     NSString *explanation = dict[@"explanation"];
 
-    scoring.finalScore = [finalScore isKindOfClass:[NSNumber class]] ? finalScore.integerValue : 0;
-    scoring.verdict = [verdict isKindOfClass:[NSNumber class]] ? (TIThreatVerdict)verdict.integerValue : TIThreatVerdictUnknown;
-    scoring.confidence = [confidence isKindOfClass:[NSNumber class]] ? confidence.doubleValue : 0.0;
+    // Validate and bounds-check finalScore (expected range: 0-10000)
+    if ([finalScore isKindOfClass:[NSNumber class]]) {
+        NSInteger scoreValue = finalScore.integerValue;
+        if (scoreValue < 0 || scoreValue > 10000) {
+            SNBLogThreatIntelError("Invalid finalScore during deserialization: %ld (corrupted data, resetting to 0)", (long)scoreValue);
+            scoreValue = 0;
+        }
+        scoring.finalScore = scoreValue;
+    } else {
+        scoring.finalScore = 0;
+    }
+
+    // Validate verdict enum (0-3)
+    if ([verdict isKindOfClass:[NSNumber class]]) {
+        NSInteger verdictValue = verdict.integerValue;
+        if (verdictValue < 0 || verdictValue > 3) {
+            SNBLogThreatIntelError("Invalid verdict during deserialization: %ld (corrupted data, setting to Unknown)", (long)verdictValue);
+            verdictValue = 3; // TIThreatVerdictUnknown
+        }
+        scoring.verdict = (TIThreatVerdict)verdictValue;
+    } else {
+        scoring.verdict = TIThreatVerdictUnknown;
+    }
+
+    // Validate confidence (expected range: 0.0-1.0)
+    if ([confidence isKindOfClass:[NSNumber class]]) {
+        double confidenceValue = confidence.doubleValue;
+        if (confidenceValue < 0.0 || confidenceValue > 1.0) {
+            SNBLogThreatIntelError("Invalid confidence during deserialization: %.2f (corrupted data, resetting to 0.0)", confidenceValue);
+            confidenceValue = 0.0;
+        }
+        scoring.confidence = confidenceValue;
+    } else {
+        scoring.confidence = 0.0;
+    }
+
     scoring.evaluatedAt = [evaluatedAt isKindOfClass:[NSNumber class]]
         ? [NSDate dateWithTimeIntervalSince1970:evaluatedAt.doubleValue]
         : [NSDate date];
@@ -433,6 +572,12 @@
         }
     }
     scoring.breakdown = breakdown;
+
+    // Debug logging after deserialization
+    SNBLogThreatIntelDebug("Deserialized scoring - score=%ld, confidence=%.2f, verdict=%ld, breakdown=%lu",
+                          (long)scoring.finalScore, scoring.confidence,
+                          (long)scoring.verdict, (unsigned long)breakdown.count);
+
     return scoring;
 }
 
@@ -451,10 +596,214 @@
     item.ruleName = [ruleName isKindOfClass:[NSString class]] ? ruleName : @"";
     item.ruleDescription = [ruleDescription isKindOfClass:[NSString class]] ? ruleDescription : @"";
     item.provider = [provider isKindOfClass:[NSString class]] ? provider : @"";
-    item.scoreContribution = [score isKindOfClass:[NSNumber class]] ? score.integerValue : 0;
+
+    // Validate scoreContribution (expected range: 0-100)
+    if ([score isKindOfClass:[NSNumber class]]) {
+        NSInteger scoreValue = score.integerValue;
+        if (scoreValue < 0 || scoreValue > 1000) {
+            SNBLogThreatIntelError("Invalid scoreContribution in breakdown: %ld (corrupted data, resetting to 0)", (long)scoreValue);
+            scoreValue = 0;
+        }
+        item.scoreContribution = scoreValue;
+    } else {
+        item.scoreContribution = 0;
+    }
+
     item.evidence = [evidence isKindOfClass:[NSDictionary class]] ? evidence : @{};
-    item.confidence = [confidence isKindOfClass:[NSNumber class]] ? confidence.integerValue : 0;
+
+    // Validate confidence (expected range: 0-100 for breakdown items)
+    if ([confidence isKindOfClass:[NSNumber class]]) {
+        NSInteger confidenceValue = confidence.integerValue;
+        if (confidenceValue < 0 || confidenceValue > 100) {
+            SNBLogThreatIntelError("Invalid confidence in breakdown: %ld (corrupted data, resetting to 0)", (long)confidenceValue);
+            confidenceValue = 0;
+        }
+        item.confidence = confidenceValue;
+    } else {
+        item.confidence = 0;
+    }
+
     return item;
+}
+
+#pragma mark - Provider Status Management
+
+- (void)saveProviderStatus:(SNBProviderStatus *)status {
+    if (!status || !status.providerName || !self.db) {
+        return;
+    }
+
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    NSTimeInterval disabledUntilTimestamp = status.disabledUntil ? [status.disabledUntil timeIntervalSince1970] : 0;
+
+    dispatch_async(self.dbQueue, ^{
+        const char *sql =
+            "INSERT OR REPLACE INTO provider_status "
+            "(provider_name, is_disabled, disabled_until, disabled_reason, error_code, last_updated) "
+            "VALUES (?, ?, ?, ?, ?, ?);";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+            SNBLogThreatIntelWarn("ThreatIntelStore provider status insert prepare failed: %s", sqlite3_errmsg(self.db));
+            return;
+        }
+
+        sqlite3_bind_text(stmt, 1, status.providerName.UTF8String, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, status.isDisabled ? 1 : 0);
+        if (disabledUntilTimestamp > 0) {
+            sqlite3_bind_int64(stmt, 3, (sqlite3_int64)disabledUntilTimestamp);
+        } else {
+            sqlite3_bind_null(stmt, 3);
+        }
+        if (status.disabledReason.length > 0) {
+            sqlite3_bind_text(stmt, 4, status.disabledReason.UTF8String, -1, SQLITE_TRANSIENT);
+        } else {
+            sqlite3_bind_null(stmt, 4);
+        }
+        sqlite3_bind_int(stmt, 5, (int)status.errorCode);
+        sqlite3_bind_int64(stmt, 6, (sqlite3_int64)now);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            SNBLogThreatIntelWarn("ThreatIntelStore provider status insert failed: %s", sqlite3_errmsg(self.db));
+        } else {
+            SNBLogThreatIntelDebug("Saved provider status: %{public}@ disabled=%d until=%{public}@ reason=%{public}@",
+                                  status.providerName, status.isDisabled,
+                                  status.disabledUntil ? status.disabledUntil.description : @"N/A",
+                                  status.disabledReason ?: @"N/A");
+        }
+        sqlite3_finalize(stmt);
+    });
+}
+
+- (SNBProviderStatus *)getProviderStatus:(NSString *)providerName {
+    if (!providerName || !self.db) {
+        return nil;
+    }
+
+    __block SNBProviderStatus *status = nil;
+    dispatch_sync(self.dbQueue, ^{
+        const char *sql = "SELECT is_disabled, disabled_until, disabled_reason, error_code, last_updated "
+                          "FROM provider_status WHERE provider_name = ? LIMIT 1;";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+            SNBLogThreatIntelWarn("ThreatIntelStore provider status query prepare failed: %s", sqlite3_errmsg(self.db));
+            return;
+        }
+
+        sqlite3_bind_text(stmt, 1, providerName.UTF8String, -1, SQLITE_TRANSIENT);
+
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            status = [[SNBProviderStatus alloc] init];
+            status.providerName = providerName;
+            status.isDisabled = sqlite3_column_int(stmt, 0) != 0;
+
+            if (sqlite3_column_type(stmt, 1) != SQLITE_NULL) {
+                sqlite3_int64 disabledUntilTimestamp = sqlite3_column_int64(stmt, 1);
+                status.disabledUntil = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)disabledUntilTimestamp];
+            }
+
+            if (sqlite3_column_type(stmt, 2) != SQLITE_NULL) {
+                const unsigned char *reason = sqlite3_column_text(stmt, 2);
+                status.disabledReason = [NSString stringWithUTF8String:(const char *)reason];
+            }
+
+            status.errorCode = sqlite3_column_int(stmt, 3);
+
+            sqlite3_int64 lastUpdated = sqlite3_column_int64(stmt, 4);
+            status.lastUpdated = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)lastUpdated];
+        }
+
+        sqlite3_finalize(stmt);
+    });
+
+    return status;
+}
+
+- (NSDictionary<NSString *, SNBProviderStatus *> *)getAllProviderStatuses {
+    if (!self.db) {
+        return @{};
+    }
+
+    NSMutableDictionary<NSString *, SNBProviderStatus *> *statuses = [NSMutableDictionary dictionary];
+
+    dispatch_sync(self.dbQueue, ^{
+        const char *sql = "SELECT provider_name, is_disabled, disabled_until, disabled_reason, error_code, last_updated "
+                          "FROM provider_status;";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+            SNBLogThreatIntelWarn("ThreatIntelStore get all provider statuses prepare failed: %s", sqlite3_errmsg(self.db));
+            return;
+        }
+
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *name = sqlite3_column_text(stmt, 0);
+            if (!name) continue;
+
+            SNBProviderStatus *status = [[SNBProviderStatus alloc] init];
+            status.providerName = [NSString stringWithUTF8String:(const char *)name];
+            status.isDisabled = sqlite3_column_int(stmt, 1) != 0;
+
+            if (sqlite3_column_type(stmt, 2) != SQLITE_NULL) {
+                sqlite3_int64 disabledUntilTimestamp = sqlite3_column_int64(stmt, 2);
+                status.disabledUntil = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)disabledUntilTimestamp];
+            }
+
+            if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
+                const unsigned char *reason = sqlite3_column_text(stmt, 3);
+                status.disabledReason = [NSString stringWithUTF8String:(const char *)reason];
+            }
+
+            status.errorCode = sqlite3_column_int(stmt, 4);
+
+            sqlite3_int64 lastUpdated = sqlite3_column_int64(stmt, 5);
+            status.lastUpdated = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)lastUpdated];
+
+            statuses[status.providerName] = status;
+        }
+
+        sqlite3_finalize(stmt);
+    });
+
+    SNBLogThreatIntelDebug("Loaded %lu provider statuses from database", (unsigned long)statuses.count);
+    return statuses;
+}
+
+- (void)clearProviderStatus:(NSString *)providerName {
+    if (!providerName || !self.db) {
+        return;
+    }
+
+    dispatch_async(self.dbQueue, ^{
+        const char *sql = "DELETE FROM provider_status WHERE provider_name = ?;";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, providerName.UTF8String, -1, SQLITE_TRANSIENT);
+            sqlite3_step(stmt);
+            SNBLogThreatIntelDebug("Cleared provider status for %{public}@", providerName);
+        }
+        sqlite3_finalize(stmt);
+    });
+}
+
+- (void)clearExpiredProviderStatuses {
+    if (!self.db) {
+        return;
+    }
+
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    dispatch_async(self.dbQueue, ^{
+        const char *sql = "DELETE FROM provider_status WHERE disabled_until IS NOT NULL AND disabled_until <= ?;";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(self.db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1, (sqlite3_int64)now);
+            if (sqlite3_step(stmt) == SQLITE_DONE) {
+                int deleted = sqlite3_changes(self.db);
+                if (deleted > 0) {
+                    SNBLogThreatIntelDebug("Cleared %d expired provider statuses", deleted);
+                }
+            }
+        }
+        sqlite3_finalize(stmt);
+    });
 }
 
 @end
