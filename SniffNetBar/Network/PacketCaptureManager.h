@@ -2,7 +2,7 @@
 //  PacketCaptureManager.h
 //  SniffNetBar
 //
-//  Packet capture manager using libpcap
+//  Packet capture manager using privileged helper via XPC
 //
 
 #import <Foundation/Foundation.h>
@@ -20,4 +20,3 @@
 - (void)stopCapture;
 
 @end
-

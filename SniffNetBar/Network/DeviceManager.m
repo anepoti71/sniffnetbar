@@ -63,7 +63,8 @@
 }
 
 - (BOOL)startCaptureWithError:(NSError **)error {
-    if (!self.selectedDevice) {
+    if (!self.selectedDevice || [self.selectedDevice.name isEqualToString:@"(no device)"]) {
+        [self loadAvailableDevices];
         self.selectedDevice = [NetworkDevice defaultDevice];
     }
 

@@ -29,6 +29,7 @@ void printUsage(const char *progName) {
 
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
+        [KeychainManager requestKeychainAccessWithError:nil];
         if (argc != 2) {
             printUsage(argv[0]);
             return 1;

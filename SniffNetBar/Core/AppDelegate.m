@@ -8,7 +8,8 @@
 #import "AppDelegate.h"
 #import "AppCoordinator.h"
 #import "ConfigurationManager.h"
-#import "AuthorizationHelper.h"
+#import "SMAppServiceHelper.h"
+#import "SNBPrivilegedHelperClient.h"
 #import "KeychainManager.h"
 #import "Logger.h"
 
@@ -17,38 +18,52 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     SNBLogInfo("=== applicationDidFinishLaunching START ===");
 
-    if (self.authorizationChecked) {
-        SNBLogInfo("Authorization already checked, proceeding to initialize");
-        [self initializeApplication];
-        return;
-    }
+    BOOL helperInstalled = [SMAppServiceHelper isHelperInstalled];
+    SNBLogInfo("isHelperInstalled returned: %d", helperInstalled);
 
-    self.authorizationChecked = YES;
-
-    if (![AuthorizationHelper isRunningAsRoot]) {
-        SNBLogInfo("Not running as root, requesting ROOT authorization");
-
-        BOOL success = [AuthorizationHelper relaunchAsRoot];
+    if (!helperInstalled) {
+        SNBLogInfo("Entering helper installation block...");
+        NSError *error = nil;
+        BOOL success = [SMAppServiceHelper installHelperWithError:&error];
         if (!success) {
-            SNBLogError("Failed to relaunch with root privileges");
             NSAlert *alert = [[NSAlert alloc] init];
-            alert.messageText = @"Authorization Required";
-            alert.informativeText = @"SniffNetBar requires root privileges to capture network packets. The application will now quit.";
+            alert.messageText = @"Installation Required";
+            alert.informativeText = [NSString stringWithFormat:@"SniffNetBar requires a privileged helper to capture network packets. Installation failed: %@",
+                                     error.localizedDescription ?: @"Unknown error"];
             alert.alertStyle = NSAlertStyleWarning;
             [alert addButtonWithTitle:@"OK"];
             [alert runModal];
             [NSApp terminate:nil];
+            return;
         }
-    } else {
-        SNBLogInfo("Already running as root");
-        [self initializeApplication];
+
+        NSString *status = [SMAppServiceHelper helperStatus];
+        if ([status isEqualToString:@"Requires Approval"]) {
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"Approval Required";
+            alert.informativeText = @"SniffNetBar Helper has been registered but needs your approval.\n\nPlease:\n1. Open System Settings > Login Items\n2. Enable 'SniffNetBar Helper' under 'Allow in the Background'\n3. Restart SniffNetBar\n\nThe application will now quit.";
+            alert.alertStyle = NSAlertStyleInformational;
+            [alert addButtonWithTitle:@"Open System Settings"];
+            [alert addButtonWithTitle:@"Quit"];
+
+            NSModalResponse response = [alert runModal];
+            if (response == NSAlertFirstButtonReturn) {
+                [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.LoginItems-Settings.extension"]];
+            }
+
+            [NSApp terminate:nil];
+            return;
+        }
     }
+
+    [[SNBPrivilegedHelperClient sharedClient] connectToHelper];
+    [self initializeApplication];
 }
 
 - (void)initializeApplication {
     SNBLogInfo("Initializing application");
 
-    // Enable keychain access now that we have root privileges
+    // Enable keychain access now that helper is installed
     NSError *error = nil;
     [KeychainManager requestKeychainAccessWithError:&error];
 

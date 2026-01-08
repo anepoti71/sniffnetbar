@@ -14,7 +14,6 @@
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) NSMenu *statusMenu;
 @property (nonatomic, strong) AppCoordinator *coordinator;
-@property (nonatomic, assign) BOOL authorizationChecked;
 
 - (void)initializeApplication;
 

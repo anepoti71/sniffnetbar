@@ -26,6 +26,7 @@ NSString *maskAPIKey(NSString *apiKey) {
 
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
+        [KeychainManager requestKeychainAccessWithError:nil];
         printf("=== SniffNetBar API Keys ===\n\n");
 
         NSArray<NSDictionary *> *providers = @[

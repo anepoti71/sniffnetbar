@@ -38,6 +38,7 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
 - (instancetype)init {
     self = [super init];
     if (self) {
+        [KeychainManager requestKeychainAccessWithError:nil];
         sConfigurationManagerInitializing = YES;
         [self loadConfiguration];
         sConfigurationManagerInitializing = NO;

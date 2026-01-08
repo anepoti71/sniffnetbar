@@ -1,0 +1,284 @@
+//
+//  SNBPrivilegedHelperClient.m
+//  SniffNetBar
+//
+
+#import "SNBPrivilegedHelperClient.h"
+#import "../XPC/SNBPrivilegedHelperProtocol.h"
+#import "NetworkDevice.h"
+#import "../XPC/NetworkDevice+Serialization.h"
+#import "ProcessLookup.h"
+#import "../XPC/ProcessInfo+Serialization.h"
+#import "PacketInfo.h"
+#import "../XPC/PacketInfo+Serialization.h"
+#import "Logger.h"
+
+@interface SNBPrivilegedHelperClient ()
+@property (nonatomic, strong) NSXPCConnection *connection;
+@property (nonatomic, strong) dispatch_queue_t connectionQueue;
+@property (nonatomic, assign) BOOL isConnecting;
+@end
+
+@implementation SNBPrivilegedHelperClient
+
++ (instancetype)sharedClient {
+    static SNBPrivilegedHelperClient *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[self alloc] init];
+    });
+    return instance;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _connectionQueue = dispatch_queue_create("com.sniffnetbar.helperclient", DISPATCH_QUEUE_SERIAL);
+        _isConnecting = NO;
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [self disconnect];
+}
+
+- (void)connectToHelper {
+    dispatch_async(self.connectionQueue, ^{
+        if (self.connection || self.isConnecting) {
+            return;
+        }
+
+        self.isConnecting = YES;
+        [self createConnection];
+        self.isConnecting = NO;
+    });
+}
+
+- (void)disconnect {
+    dispatch_sync(self.connectionQueue, ^{
+        if (self.connection) {
+            [self.connection invalidate];
+            self.connection = nil;
+        }
+    });
+}
+
+- (BOOL)isConnected {
+    __block BOOL connected = NO;
+    dispatch_sync(self.connectionQueue, ^{
+        connected = self.connection != nil;
+    });
+    return connected;
+}
+
+- (id<SNBPrivilegedHelperProtocol>)helperProxy {
+    __block id<SNBPrivilegedHelperProtocol> proxy = nil;
+    dispatch_sync(self.connectionQueue, ^{
+        if (!self.connection) {
+            [self createConnection];
+            if (!self.connection) {
+                SNBLogError("No helper connection available");
+                return;
+            }
+        }
+        proxy = [self.connection remoteObjectProxyWithErrorHandler:^(NSError *error) {
+            SNBLogError("Helper proxy error: %{public}s", error.localizedDescription.UTF8String);
+        }];
+    });
+    return proxy;
+}
+
+- (void)createConnection {
+    SNBLogInfo("Connecting to privileged helper...");
+
+    self.connection = [[NSXPCConnection alloc] initWithMachServiceName:kSNBPrivilegedHelperMachServiceName
+                                                                options:NSXPCConnectionPrivileged];
+    self.connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SNBPrivilegedHelperProtocol)];
+
+    __weak typeof(self) weakSelf = self;
+    self.connection.invalidationHandler = ^{
+        SNBLogWarn("Helper connection invalidated");
+        dispatch_async(weakSelf.connectionQueue, ^{
+            weakSelf.connection = nil;
+            weakSelf.isConnecting = NO;
+        });
+    };
+
+    self.connection.interruptionHandler = ^{
+        SNBLogWarn("Helper connection interrupted");
+        dispatch_async(weakSelf.connectionQueue, ^{
+            [weakSelf.connection invalidate];
+            weakSelf.connection = nil;
+            weakSelf.isConnecting = NO;
+        });
+    };
+
+    [self.connection resume];
+}
+
+- (void)getVersionWithCompletion:(void (^)(NSString * _Nullable, NSError * _Nullable))completion {
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    if (!helper) {
+        if (completion) {
+            NSError *error = [NSError errorWithDomain:@"SNBHelperClient"
+                                                 code:1
+                                             userInfo:@{NSLocalizedDescriptionKey: @"Helper not connected"}];
+            completion(nil, error);
+        }
+        return;
+    }
+
+    [helper getVersionWithReply:^(NSString *version) {
+        if (completion) {
+            completion(version, nil);
+        }
+    }];
+}
+
+- (void)enumerateDevicesWithCompletion:(void (^)(NSArray<NetworkDevice *> *, NSError *))completion {
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    if (!helper) {
+        if (completion) {
+            NSError *error = [NSError errorWithDomain:@"SNBHelperClient"
+                                                 code:1
+                                             userInfo:@{NSLocalizedDescriptionKey: @"Helper not connected"}];
+            completion(nil, error);
+        }
+        return;
+    }
+
+    [helper enumerateNetworkDevicesWithReply:^(NSArray<NSDictionary *> *devices, NSError *error) {
+        if (error) {
+            if (completion) {
+                completion(nil, error);
+            }
+            return;
+        }
+
+        NSMutableArray<NetworkDevice *> *deviceObjects = [NSMutableArray array];
+        for (NSDictionary *dict in devices) {
+            NetworkDevice *device = [NetworkDevice fromDictionary:dict];
+            if (device) {
+                [deviceObjects addObject:device];
+            }
+        }
+
+        if (completion) {
+            completion([deviceObjects copy], nil);
+        }
+    }];
+}
+
+- (void)startCaptureOnDevice:(NSString *)deviceName
+                  completion:(void (^)(NSString * _Nullable, NSError * _Nullable))completion {
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    if (!helper) {
+        if (completion) {
+            NSError *error = [NSError errorWithDomain:@"SNBHelperClient"
+                                                 code:1
+                                             userInfo:@{NSLocalizedDescriptionKey: @"Helper not connected"}];
+            completion(nil, error);
+        }
+        return;
+    }
+
+    [helper startCaptureOnDevice:deviceName withReply:^(NSString *sessionID, NSError *error) {
+        if (completion) {
+            completion(sessionID, error);
+        }
+    }];
+}
+
+- (void)stopCaptureForSession:(NSString *)sessionID
+                   completion:(void (^)(NSError * _Nullable))completion {
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    if (!helper) {
+        if (completion) {
+            NSError *error = [NSError errorWithDomain:@"SNBHelperClient"
+                                                 code:1
+                                             userInfo:@{NSLocalizedDescriptionKey: @"Helper not connected"}];
+            completion(error);
+        }
+        return;
+    }
+
+    [helper stopCaptureForSession:sessionID withReply:^(NSError *error) {
+        if (completion) {
+            completion(error);
+        }
+    }];
+}
+
+- (void)getNextPacketForSession:(NSString *)sessionID
+                     completion:(void (^)(PacketInfo * _Nullable, NSError * _Nullable))completion {
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    if (!helper) {
+        if (completion) {
+            completion(nil, nil);
+        }
+        return;
+    }
+
+    [helper getNextPacketForSession:sessionID withReply:^(NSDictionary *packetInfo, NSError *error) {
+        if (error) {
+            if (completion) {
+                completion(nil, error);
+            }
+            return;
+        }
+
+        if (!packetInfo) {
+            if (completion) {
+                completion(nil, nil);
+            }
+            return;
+        }
+
+        PacketInfo *packet = [PacketInfo fromDictionary:packetInfo];
+        if (completion) {
+            completion(packet, nil);
+        }
+    }];
+}
+
+- (void)lookupProcessWithSourceAddress:(NSString *)sourceAddress
+                            sourcePort:(NSInteger)sourcePort
+                       destinationAddr:(NSString *)destinationAddr
+                       destinationPort:(NSInteger)destinationPort
+                            completion:(void (^)(ProcessInfo * _Nullable, NSError * _Nullable))completion {
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    if (!helper) {
+        if (completion) {
+            completion(nil, nil);
+        }
+        return;
+    }
+
+    [helper lookupProcessWithSourceAddress:sourceAddress
+                                sourcePort:sourcePort
+                        destinationAddress:destinationAddr
+                           destinationPort:destinationPort
+                                 withReply:^(NSDictionary *processInfo, NSError *error) {
+        if (error) {
+            if (completion) {
+                completion(nil, error);
+            }
+            return;
+        }
+
+        if (!processInfo) {
+            if (completion) {
+                completion(nil, nil);
+            }
+            return;
+        }
+
+        ProcessInfo *info = [ProcessInfo fromDictionary:processInfo];
+        if (completion) {
+            completion(info, nil);
+        }
+    }];
+}
+
+@end
