@@ -21,10 +21,116 @@
 @property (nonatomic, strong) SNBHelperPacketCapture *packetCapture;
 @property (nonatomic, strong) SNBHelperProcessLookup *processLookup;
 @property (nonatomic, strong) SNBHelperDeviceEnumerator *deviceEnumerator;
+@property (nonatomic, copy) NSString *teamIdentifier;
 
 @end
 
 @implementation SNBPrivilegedHelperService
+
+static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
+    NSSet *stringClasses = [NSSet setWithObjects:[NSString class], nil];
+    NSSet *sessionReplyClasses = [NSSet setWithObjects:[NSString class], [NSError class], nil];
+    NSSet *errorClasses = [NSSet setWithObjects:[NSError class], nil];
+    NSSet *packetDictClasses = [NSSet setWithObjects:[NSDictionary class], [NSString class], [NSNumber class], nil];
+    NSSet *processDictClasses = [NSSet setWithObjects:[NSDictionary class], [NSString class], [NSNumber class], nil];
+    NSSet *deviceArrayClasses = [NSSet setWithObjects:[NSArray class], [NSDictionary class], [NSString class], nil];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(getVersionWithReply:)
+            argumentIndex:0
+                  ofReply:YES];
+
+    [interface setClasses:deviceArrayClasses
+              forSelector:@selector(enumerateNetworkDevicesWithReply:)
+            argumentIndex:0
+                  ofReply:YES];
+    [interface setClasses:errorClasses
+              forSelector:@selector(enumerateNetworkDevicesWithReply:)
+            argumentIndex:1
+                  ofReply:YES];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(startCaptureOnDevice:withReply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:sessionReplyClasses
+              forSelector:@selector(startCaptureOnDevice:withReply:)
+            argumentIndex:0
+                  ofReply:YES];
+    [interface setClasses:errorClasses
+              forSelector:@selector(startCaptureOnDevice:withReply:)
+            argumentIndex:1
+                  ofReply:YES];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(stopCaptureForSession:withReply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:errorClasses
+              forSelector:@selector(stopCaptureForSession:withReply:)
+            argumentIndex:0
+                  ofReply:YES];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(getNextPacketForSession:withReply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:packetDictClasses
+              forSelector:@selector(getNextPacketForSession:withReply:)
+            argumentIndex:0
+                  ofReply:YES];
+    [interface setClasses:errorClasses
+              forSelector:@selector(getNextPacketForSession:withReply:)
+            argumentIndex:1
+                  ofReply:YES];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:[NSSet setWithObjects:[NSNumber class], nil]
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:1
+                  ofReply:NO];
+    [interface setClasses:stringClasses
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:2
+                  ofReply:NO];
+    [interface setClasses:[NSSet setWithObjects:[NSNumber class], nil]
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:3
+                  ofReply:NO];
+    [interface setClasses:processDictClasses
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:0
+                  ofReply:YES];
+    [interface setClasses:errorClasses
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:1
+                  ofReply:YES];
+}
+
+static NSString *SNBTeamIdentifierForSelf(void) {
+    SecCodeRef selfCode = NULL;
+    OSStatus status = SecCodeCopySelf(kSecCSDefaultFlags, &selfCode);
+    if (status != errSecSuccess || !selfCode) {
+        return nil;
+    }
+
+    CFDictionaryRef signingInfo = NULL;
+    status = SecCodeCopySigningInformation(selfCode, kSecCSSigningInformation, &signingInfo);
+    CFRelease(selfCode);
+    if (status != errSecSuccess || !signingInfo) {
+        if (signingInfo) {
+            CFRelease(signingInfo);
+        }
+        return nil;
+    }
+
+    NSString *teamID = [(__bridge NSDictionary *)signingInfo objectForKey:(__bridge id)kSecCodeInfoTeamIdentifier];
+    CFRelease(signingInfo);
+    return teamID;
+}
 
 - (instancetype)init {
     self = [super init];
@@ -34,6 +140,7 @@
         _packetCapture = [[SNBHelperPacketCapture alloc] init];
         _processLookup = [[SNBHelperProcessLookup alloc] init];
         _deviceEnumerator = [[SNBHelperDeviceEnumerator alloc] init];
+        _teamIdentifier = SNBTeamIdentifierForSelf();
     }
     return self;
 }
@@ -56,7 +163,9 @@
         return NO;
     }
 
-    newConnection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SNBPrivilegedHelperProtocol)];
+    NSXPCInterface *interface = [NSXPCInterface interfaceWithProtocol:@protocol(SNBPrivilegedHelperProtocol)];
+    SNBConfigureHelperInterface(interface);
+    newConnection.exportedInterface = interface;
     newConnection.exportedObject = self;
 
     newConnection.invalidationHandler = ^{
@@ -103,9 +212,12 @@
     }
 
     NSString *bundleID = [(__bridge NSDictionary *)signingInfo objectForKey:(__bridge id)kSecCodeInfoIdentifier];
-    BOOL isValid = [bundleID isEqualToString:@"com.sniffnetbar.app"];
+    NSString *teamID = [(__bridge NSDictionary *)signingInfo objectForKey:(__bridge id)kSecCodeInfoTeamIdentifier];
+    BOOL isValid = [bundleID isEqualToString:@"com.sniffnetbar.app"] &&
+        (self.teamIdentifier.length > 0) &&
+        [teamID isEqualToString:self.teamIdentifier];
     if (!isValid) {
-        NSLog(@"Helper: Invalid bundle identifier: %@", bundleID);
+        NSLog(@"Helper: Invalid client signature (bundleID: %@, teamID: %@)", bundleID, teamID);
     }
 
     CFRelease(signingInfo);

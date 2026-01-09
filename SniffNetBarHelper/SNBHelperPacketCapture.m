@@ -16,6 +16,7 @@
 static const int kPcapSnaplen = 65536;
 static const int kPcapPromiscuousMode = 0;
 static const int kPcapTimeoutMs = 500;
+static const NSUInteger kSNBMaxActiveCaptureSessions = 4;
 
 @interface SNBHelperCaptureSession : NSObject
 
@@ -57,6 +58,15 @@ static const int kPcapTimeoutMs = 500;
     }
 
     dispatch_async(self.managementQueue, ^{
+        if (self.sessions.count >= kSNBMaxActiveCaptureSessions) {
+            NSError *error = [NSError errorWithDomain:@"SNBHelperPacketCapture"
+                                                 code:7
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"Too many active capture sessions"}];
+            reply(nil, error);
+            return;
+        }
+
         char errbuf[PCAP_ERRBUF_SIZE];
         pcap_t *handle = pcap_open_live(deviceName.UTF8String,
                                         kPcapSnaplen,
@@ -124,43 +134,52 @@ static const int kPcapTimeoutMs = 500;
         return;
     }
 
-    SNBHelperCaptureSession *session = self.sessions[sessionID];
-    if (!session || !session.pcapHandle) {
-        reply(nil, [NSError errorWithDomain:@"SNBHelperPacketCapture"
-                                       code:5
-                                   userInfo:@{NSLocalizedDescriptionKey: @"Session not found"}]);
-        return;
-    }
-
-    dispatch_async(session.queue, ^{
-        struct pcap_pkthdr *header = NULL;
-        const u_char *packet = NULL;
-        int result = pcap_next_ex(session.pcapHandle, &header, &packet);
-
-        if (result == 1) {
-            PacketInfo *info = [self parsePacket:packet
-                                   capturedLength:header->caplen
-                                     actualLength:header->len];
-            reply(info ? [info toDictionary] : nil, nil);
+    dispatch_async(self.managementQueue, ^{
+        SNBHelperCaptureSession *session = self.sessions[sessionID];
+        if (!session) {
+            reply(nil, [NSError errorWithDomain:@"SNBHelperPacketCapture"
+                                           code:5
+                                       userInfo:@{NSLocalizedDescriptionKey: @"Session not found"}]);
             return;
         }
 
-        if (result == 0) {
+        dispatch_async(session.queue, ^{
+            if (!session.pcapHandle) {
+                reply(nil, [NSError errorWithDomain:@"SNBHelperPacketCapture"
+                                               code:8
+                                           userInfo:@{NSLocalizedDescriptionKey: @"Session closed"}]);
+                return;
+            }
+
+            struct pcap_pkthdr *header = NULL;
+            const u_char *packet = NULL;
+            int result = pcap_next_ex(session.pcapHandle, &header, &packet);
+
+            if (result == 1) {
+                PacketInfo *info = [self parsePacket:packet
+                                       capturedLength:header->caplen
+                                         actualLength:header->len];
+                reply(info ? [info toDictionary] : nil, nil);
+                return;
+            }
+
+            if (result == 0) {
+                reply(nil, nil);
+                return;
+            }
+
+            if (result == -1) {
+                const char *errorMsg = pcap_geterr(session.pcapHandle);
+                NSError *error = [NSError errorWithDomain:@"SNBHelperPacketCapture"
+                                                     code:6
+                                                 userInfo:@{NSLocalizedDescriptionKey:
+                                                                [NSString stringWithUTF8String:errorMsg]}];
+                reply(nil, error);
+                return;
+            }
+
             reply(nil, nil);
-            return;
-        }
-
-        if (result == -1) {
-            const char *errorMsg = pcap_geterr(session.pcapHandle);
-            NSError *error = [NSError errorWithDomain:@"SNBHelperPacketCapture"
-                                                 code:6
-                                             userInfo:@{NSLocalizedDescriptionKey:
-                                                            [NSString stringWithUTF8String:errorMsg]}];
-            reply(nil, error);
-            return;
-        }
-
-        reply(nil, nil);
+        });
     });
 }
 

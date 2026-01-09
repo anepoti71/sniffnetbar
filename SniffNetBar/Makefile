@@ -85,7 +85,7 @@ HELPER_SOURCES = $(shell find ../SniffNetBarHelper -name '*.m')
 # Note: No quotes here - they'll be added in codesign commands
 CODESIGN_IDENTITY ?=
 
-# Local overrides (ignored by git)
+# Local overrides
 -include Makefile.local
 
 # Targets

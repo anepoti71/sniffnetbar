@@ -21,6 +21,89 @@
 
 @implementation SNBPrivilegedHelperClient
 
+static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
+    NSSet *stringClasses = [NSSet setWithObjects:[NSString class], nil];
+    NSSet *sessionReplyClasses = [NSSet setWithObjects:[NSString class], [NSError class], nil];
+    NSSet *errorClasses = [NSSet setWithObjects:[NSError class], nil];
+    NSSet *packetDictClasses = [NSSet setWithObjects:[NSDictionary class], [NSString class], [NSNumber class], nil];
+    NSSet *processDictClasses = [NSSet setWithObjects:[NSDictionary class], [NSString class], [NSNumber class], nil];
+    NSSet *deviceArrayClasses = [NSSet setWithObjects:[NSArray class], [NSDictionary class], [NSString class], nil];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(getVersionWithReply:)
+            argumentIndex:0
+                  ofReply:YES];
+
+    [interface setClasses:deviceArrayClasses
+              forSelector:@selector(enumerateNetworkDevicesWithReply:)
+            argumentIndex:0
+                  ofReply:YES];
+    [interface setClasses:errorClasses
+              forSelector:@selector(enumerateNetworkDevicesWithReply:)
+            argumentIndex:1
+                  ofReply:YES];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(startCaptureOnDevice:withReply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:sessionReplyClasses
+              forSelector:@selector(startCaptureOnDevice:withReply:)
+            argumentIndex:0
+                  ofReply:YES];
+    [interface setClasses:errorClasses
+              forSelector:@selector(startCaptureOnDevice:withReply:)
+            argumentIndex:1
+                  ofReply:YES];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(stopCaptureForSession:withReply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:errorClasses
+              forSelector:@selector(stopCaptureForSession:withReply:)
+            argumentIndex:0
+                  ofReply:YES];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(getNextPacketForSession:withReply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:packetDictClasses
+              forSelector:@selector(getNextPacketForSession:withReply:)
+            argumentIndex:0
+                  ofReply:YES];
+    [interface setClasses:errorClasses
+              forSelector:@selector(getNextPacketForSession:withReply:)
+            argumentIndex:1
+                  ofReply:YES];
+
+    [interface setClasses:stringClasses
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:0
+                  ofReply:NO];
+    [interface setClasses:[NSSet setWithObjects:[NSNumber class], nil]
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:1
+                  ofReply:NO];
+    [interface setClasses:stringClasses
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:2
+                  ofReply:NO];
+    [interface setClasses:[NSSet setWithObjects:[NSNumber class], nil]
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:3
+                  ofReply:NO];
+    [interface setClasses:processDictClasses
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:0
+                  ofReply:YES];
+    [interface setClasses:errorClasses
+              forSelector:@selector(lookupProcessWithSourceAddress:sourcePort:destinationAddress:destinationPort:withReply:)
+            argumentIndex:1
+                  ofReply:YES];
+}
+
 + (instancetype)sharedClient {
     static SNBPrivilegedHelperClient *instance = nil;
     static dispatch_once_t onceToken;
@@ -94,7 +177,9 @@
 
     self.connection = [[NSXPCConnection alloc] initWithMachServiceName:kSNBPrivilegedHelperMachServiceName
                                                                 options:NSXPCConnectionPrivileged];
-    self.connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SNBPrivilegedHelperProtocol)];
+    NSXPCInterface *interface = [NSXPCInterface interfaceWithProtocol:@protocol(SNBPrivilegedHelperProtocol)];
+    SNBConfigureHelperInterface(interface);
+    self.connection.remoteObjectInterface = interface;
 
     __weak typeof(self) weakSelf = self;
     self.connection.invalidationHandler = ^{
