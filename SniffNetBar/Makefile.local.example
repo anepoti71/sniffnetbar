@@ -1,0 +1,4 @@
+# Local-only overrides for SniffNetBar builds.
+# Copy to Makefile.local and set your signing identity.
+
+CODESIGN_IDENTITY = Mac Developer: ALESSANDRO NEPOTI (3VPR4FCRV8)

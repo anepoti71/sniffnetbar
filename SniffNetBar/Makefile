@@ -81,9 +81,12 @@ TEST_OBJECTS = $(TEST_SOURCES:%.m=$(BUILD_DIR)/%.o)
 # Helper sources
 HELPER_SOURCES = $(shell find ../SniffNetBarHelper -name '*.m')
 
-# Code signing identity (set to Mac Developer for SMAppService)
+# Code signing identity (set locally for SMAppService)
 # Note: No quotes here - they'll be added in codesign commands
-CODESIGN_IDENTITY ?= Mac Developer: ALESSANDRO NEPOTI (3VPR4FCRV8)
+CODESIGN_IDENTITY ?=
+
+# Local overrides (ignored by git)
+-include Makefile.local
 
 # Targets
 all: helper $(APP_BUNDLE) tools
