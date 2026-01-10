@@ -17,6 +17,22 @@ Fork of Sniffnet, extended into a macOS menu bar application with passive threat
 - macOS 10.13 or later
 - libpcap (install via Homebrew: `brew install libpcap`)
 - Xcode Command Line Tools
+- A valid Apple code signing certificate (see "Helper signing" below)
+
+## Helper signing (required for install)
+
+SniffNetBar uses a privileged helper installed via `SMAppService`. The helper only accepts
+connections from a signed app with the same Team ID, so you must sign both the app and
+helper with a real Apple certificate (ad-hoc signing will fail).
+
+1. Create or install a signing certificate in Keychain (for local dev, "Apple Development"
+   works; for distribution, use "Developer ID Application").
+2. Set the `CODESIGN_IDENTITY` used by the Makefile:
+   - One-off: `CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" make`
+   - Or create `SniffNetBar/Makefile.local` and set `CODESIGN_IDENTITY = Apple Development: Your Name (TEAMID)`
+
+If `CODESIGN_IDENTITY` is not set, the build will succeed but the helper install/connection
+will fail at runtime.
 
 ## Build
 
