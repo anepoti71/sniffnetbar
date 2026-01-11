@@ -13,6 +13,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)installHelperWithError:(NSError **)error;
 + (BOOL)uninstallHelperWithError:(NSError **)error;
 + (NSString *)helperStatus;
++ (BOOL)helperBinaryExists;
++ (BOOL)helperPlistProgramArgumentsMatch;
 
 @end
 

@@ -13,6 +13,8 @@ HELPER_NAME = com.sniffnetbar.helper
 HELPER_BUNDLE = $(BUILD_DIR)/$(HELPER_NAME).app
 HELPER_BINARY = $(HELPER_BUNDLE)/Contents/MacOS/$(HELPER_NAME)
 APP_LAUNCHDAEMONS_DIR = $(CONTENTS_DIR)/Library/LaunchDaemons
+INSTALL_DIR = $(HOME)/Applications
+INSTALL_APP = $(INSTALL_DIR)/$(APP_NAME).app
 INFO_PLIST_SRC = Info.plist
 ICON_SRC = ../resources/logos/raw/icon_macos.png
 ICNS_SRC = ../resources/logos/raw/sniffnet.icns
@@ -159,7 +161,7 @@ $(RESOURCES_DIR):
 	mkdir -p $(RESOURCES_DIR)
 
 # Command-line tools for API key management and testing
-tools: $(BUILD_DIR)/set_apikey $(BUILD_DIR)/remove_apikey $(BUILD_DIR)/list_apikeys $(BUILD_DIR)/list_apikey $(BUILD_DIR)/unregister_helper
+tools: $(BUILD_DIR)/set_apikey $(BUILD_DIR)/remove_apikey $(BUILD_DIR)/list_apikeys $(BUILD_DIR)/unregister_helper $(BUILD_DIR)/register_helper $(BUILD_DIR)/status_helper
 
 # Test utilities
 test-threat-intel: $(BUILD_DIR)/test_threat_intel
@@ -201,10 +203,6 @@ $(BUILD_DIR)/list_apikeys: Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainMa
 	@echo "Building list_apikeys tool..."
 	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o -o $(BUILD_DIR)/list_apikeys $(FRAMEWORKS)
 
-$(BUILD_DIR)/list_apikey: $(BUILD_DIR)/list_apikeys | $(BUILD_DIR)
-	@echo "Creating list_apikey tool alias..."
-	@cp $(BUILD_DIR)/list_apikeys $(BUILD_DIR)/list_apikey
-
 $(BUILD_DIR)/unregister_helper: Tools/unregister_helper.m $(BUILD_DIR)/Utils/SMAppServiceHelper.o $(BUILD_DIR)/Utils/Logger.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Config/KeychainManager.o | $(BUILD_DIR)
 	@echo "Building unregister_helper tool..."
 	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Tools/unregister_helper.m \
@@ -214,14 +212,47 @@ $(BUILD_DIR)/unregister_helper: Tools/unregister_helper.m $(BUILD_DIR)/Utils/SMA
 		$(BUILD_DIR)/Config/KeychainManager.o \
 		-o $(BUILD_DIR)/unregister_helper $(FRAMEWORKS)
 
+$(BUILD_DIR)/register_helper: Tools/register_helper.m $(BUILD_DIR)/Utils/SMAppServiceHelper.o $(BUILD_DIR)/Utils/Logger.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Config/KeychainManager.o | $(BUILD_DIR)
+	@echo "Building register_helper tool..."
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Tools/register_helper.m \
+		$(BUILD_DIR)/Utils/SMAppServiceHelper.o \
+		$(BUILD_DIR)/Utils/Logger.o \
+		$(BUILD_DIR)/Config/ConfigurationManager.o \
+		$(BUILD_DIR)/Config/KeychainManager.o \
+		-o $(BUILD_DIR)/register_helper $(FRAMEWORKS)
+
+$(BUILD_DIR)/status_helper: Tools/status_helper.m $(BUILD_DIR)/Utils/SMAppServiceHelper.o $(BUILD_DIR)/Utils/Logger.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Config/KeychainManager.o | $(BUILD_DIR)
+	@echo "Building status_helper tool..."
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Tools/status_helper.m \
+		$(BUILD_DIR)/Utils/SMAppServiceHelper.o \
+		$(BUILD_DIR)/Utils/Logger.o \
+		$(BUILD_DIR)/Config/ConfigurationManager.o \
+		$(BUILD_DIR)/Config/KeychainManager.o \
+		-o $(BUILD_DIR)/status_helper $(FRAMEWORKS)
+
 clean:
 	rm -rf $(BUILD_DIR)
 
-install: $(APP_BUNDLE)
+install: $(APP_BUNDLE) tools
 	@echo "Installing $(APP_NAME)..."
-	@mkdir -p ~/Applications
-	@cp -R $(APP_BUNDLE) ~/Applications/
-	@echo "Installed to ~/Applications/$(APP_NAME).app"
+	@mkdir -p $(INSTALL_DIR)
+	@cp -R $(APP_BUNDLE) $(INSTALL_DIR)/
+	@cp $(BUILD_DIR)/register_helper $(INSTALL_APP)/Contents/MacOS/register_helper
+	@/usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $(abspath $(INSTALL_APP))/Contents/Library/LaunchDaemons/$(HELPER_NAME).app/Contents/MacOS/$(HELPER_NAME)" \
+		$(INSTALL_APP)/Contents/Library/LaunchDaemons/$(HELPER_NAME).plist
+	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \
+		echo "Re-signing installed bundles..."; \
+		codesign --force --options runtime --entitlements ../SniffNetBarHelper/SniffNetBarHelper.entitlements \
+			--sign "$(CODESIGN_IDENTITY)" $(INSTALL_APP)/Contents/Library/LaunchDaemons/$(HELPER_NAME).app/Contents/MacOS/$(HELPER_NAME); \
+		codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" \
+			$(INSTALL_APP)/Contents/Library/LaunchDaemons/$(HELPER_NAME).app; \
+		codesign --force --options runtime --entitlements Config/SniffNetBar.entitlements \
+			--sign "$(CODESIGN_IDENTITY)" --deep $(INSTALL_APP); \
+		echo "Installed bundles re-signed"; \
+	else \
+		echo "Warning: CODESIGN_IDENTITY not set, installed bundles not re-signed"; \
+	fi
+	@echo "Installed to $(INSTALL_APP)"
 	@echo ""
 	@echo "Note: The application will request root privileges on startup for packet capture."
 
@@ -229,10 +260,15 @@ dmg: $(APP_BUNDLE)
 	@echo "Creating DMG installer..."
 	@./Scripts/create_dmg.sh
 
-run: $(if $(CLEAN),clean,) $(APP_BUNDLE) tools
+run: $(if $(CLEAN),clean,) install
 	@echo "Running $(APP_NAME)..."
 	@pkill -x $(APP_NAME) >/dev/null 2>&1 || true
-	@open -n $(APP_BUNDLE) || $(MACOS_DIR)/$(APP_NAME)
+	@if [ -x "$(INSTALL_APP)/Contents/MacOS/register_helper" ]; then \
+		"$(INSTALL_APP)/Contents/MacOS/register_helper" || true; \
+	else \
+		echo "Warning: register_helper missing at $(INSTALL_APP)/Contents/MacOS/register_helper"; \
+	fi
+	@open -n $(INSTALL_APP) || $(INSTALL_APP)/Contents/MacOS/$(APP_NAME)
 
 # Test targets
 TEST_BUNDLE = $(BUILD_DIR)/Tests.xctest

@@ -5,9 +5,19 @@
 
 #import "SMAppServiceHelper.h"
 #import <ServiceManagement/ServiceManagement.h>
+#import <Security/Security.h>
 #import "Logger.h"
 
 @implementation SMAppServiceHelper
+
+static BOOL SNBSetError(NSError **error, NSInteger code, NSString *message) {
+    if (error && *error == nil) {
+        *error = [NSError errorWithDomain:@"SMAppServiceHelper"
+                                     code:code
+                                 userInfo:@{NSLocalizedDescriptionKey: message ?: @"Unknown error"}];
+    }
+    return NO;
+}
 
 + (NSString *)helperPlistPath {
     NSString *bundlePath = [NSBundle mainBundle].bundlePath;
@@ -43,6 +53,55 @@
         return NO;
     }
 
+    return YES;
+}
+
++ (BOOL)isBundleCodeSigned {
+    NSString *bundlePath = [NSBundle mainBundle].bundlePath;
+    if (bundlePath.length == 0) {
+        return NO;
+    }
+
+    SecStaticCodeRef codeRef = NULL;
+    NSURL *bundleURL = [NSURL fileURLWithPath:bundlePath];
+    OSStatus status = SecStaticCodeCreateWithPath((__bridge CFURLRef)bundleURL,
+                                                  kSecCSDefaultFlags,
+                                                  &codeRef);
+    if (status != errSecSuccess || !codeRef) {
+        return NO;
+    }
+
+    status = SecStaticCodeCheckValidity(codeRef, kSecCSDefaultFlags, NULL);
+    CFRelease(codeRef);
+    return status == errSecSuccess;
+}
+
++ (BOOL)ensureHelperPlistProgramArgumentsWithError:(NSError **)error {
+    NSString *plistPath = [self helperPlistPath];
+    NSMutableDictionary *plist = [NSMutableDictionary dictionaryWithContentsOfFile:plistPath];
+    if (!plist) {
+        return SNBSetError(error, 4, @"Helper plist not found or unreadable in app bundle.");
+    }
+
+    NSString *binaryPath = [self helperBinaryPath];
+    NSArray *arguments = plist[@"ProgramArguments"];
+    NSString *currentPath = arguments.firstObject;
+    if ([currentPath isEqualToString:binaryPath]) {
+        return YES;
+    }
+
+    if ([self isBundleCodeSigned]) {
+        return SNBSetError(error, 5,
+                           @"Helper plist ProgramArguments do not match the current app location. "
+                           @"App bundle is code signed, so it cannot be modified. Rebuild and reinstall.");
+    }
+
+    plist[@"ProgramArguments"] = @[binaryPath];
+    if (![plist writeToFile:plistPath atomically:YES]) {
+        return SNBSetError(error, 6, @"Failed to update helper plist ProgramArguments.");
+    }
+
+    SNBLogInfo("Updated helper plist ProgramArguments to %{public}@", binaryPath);
     return YES;
 }
 
@@ -89,13 +148,7 @@
         return NO;
     }
 
-    if (![self helperPlistProgramArgumentsMatch]) {
-        if (error && *error == nil) {
-            *error = [NSError errorWithDomain:@"SMAppServiceHelper"
-                                         code:3
-                                     userInfo:@{NSLocalizedDescriptionKey:
-                                                    @"Helper plist ProgramArguments do not match the current app location. Rebuild the app to update the helper path."}];
-        }
+    if (![self ensureHelperPlistProgramArgumentsWithError:error]) {
         return NO;
     }
 
