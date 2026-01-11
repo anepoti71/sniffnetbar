@@ -54,7 +54,7 @@
 
 	<!-- About Configuration -->
 	<key>AppVersion</key>
-	<string>1.0.1</string>
+	<string>1.1</string>
 
 	<!-- Explainability Configuration -->
 	<key>ExplainabilityEnabled</key>
