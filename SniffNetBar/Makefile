@@ -57,7 +57,7 @@ THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/Providers/VirusTotalProvider.m \
                       ThreatIntel/Providers/AbuseIPDBProvider.m \
                       ThreatIntel/Providers/GreyNoiseProvider.m
-UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m
+UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m UI/MenuBuilder+ThreatDisplay.m
 UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m Utils/ProcessLookup.m Utils/SMAppServiceHelper.m Utils/SNBPrivilegedHelperClient.m
 XPC_SOURCES = XPC/PacketInfo+Serialization.m XPC/ProcessInfo+Serialization.m XPC/NetworkDevice+Serialization.m
 
@@ -74,7 +74,7 @@ SOURCES = $(CORE_SOURCES) $(CONFIG_SOURCES) $(MODEL_SOURCES) \
 
 # Library sources (for tests - exclude main.m and AppDelegate.m)
 LIB_SOURCES = $(CONFIG_SOURCES) $(MODEL_SOURCES) $(NETWORK_SOURCES) \
-              $(THREATINTEL_SOURCES) UI/MapMenuView.m UI/MenuBuilder.m $(UTIL_SOURCES) $(XPC_SOURCES)
+              $(THREATINTEL_SOURCES) $(UI_SOURCES) $(UTIL_SOURCES) $(XPC_SOURCES)
 
 OBJECTS = $(SOURCES:%.m=$(BUILD_DIR)/%.o)
 LIB_OBJECTS = $(LIB_SOURCES:%.m=$(BUILD_DIR)/%.o)
@@ -260,14 +260,24 @@ dmg: $(APP_BUNDLE)
 	@echo "Creating DMG installer..."
 	@./Scripts/create_dmg.sh
 
-run: $(if $(CLEAN),clean,) install
-	@echo "Running $(APP_NAME)..."
-	@pkill -x $(APP_NAME) >/dev/null 2>&1 || true
+run:
+	@if [ ! -d "$(INSTALL_APP)" ]; then \
+		echo "Error: $(INSTALL_APP) not found – run 'make install' first."; \
+		exit 1; \
+	fi
+	@echo "Ensuring helper is registered..."
 	@if [ -x "$(INSTALL_APP)/Contents/MacOS/register_helper" ]; then \
-		"$(INSTALL_APP)/Contents/MacOS/register_helper" || true; \
+		if "$(INSTALL_APP)/Contents/MacOS/register_helper" --status >/dev/null 2>&1; then \
+			echo "Helper already registered."; \
+		else \
+			echo "Registering helper..."; \
+			"$(INSTALL_APP)/Contents/MacOS/register_helper"; \
+		fi \
 	else \
 		echo "Warning: register_helper missing at $(INSTALL_APP)/Contents/MacOS/register_helper"; \
 	fi
+	@echo "Running $(APP_NAME)..."
+	@pkill -x $(APP_NAME) >/dev/null 2>&1 || true
 	@open -n $(INSTALL_APP) || $(INSTALL_APP)/Contents/MacOS/$(APP_NAME)
 
 # Test targets

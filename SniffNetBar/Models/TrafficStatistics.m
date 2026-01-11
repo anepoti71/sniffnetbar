@@ -714,6 +714,21 @@ static NSString *SNBResolveHostname(NSString *address,
 
     stats.topHosts = self.cachedTopHosts;
     stats.topConnections = self.cachedTopConnections;
+
+    // Collect ALL active destination IPs (not just from top connections) for threat intel
+    NSMutableSet<NSString *> *allDestIPs = [NSMutableSet set];
+    for (ConnectionTraffic *conn in self.connectionStats.allValues) {
+        if (conn.destinationAddress.length > 0) {
+            [allDestIPs addObject:conn.destinationAddress];
+        }
+    }
+    for (HostTraffic *host in self.hostStats.allValues) {
+        if (host.address.length > 0) {
+            [allDestIPs addObject:host.address];
+        }
+    }
+    stats.allActiveDestinationIPs = [allDestIPs copy];
+
     return stats;
 }
 
@@ -741,6 +756,41 @@ static NSString *SNBResolveHostname(NSString *address,
         TrafficStats *stats = [strongSelf currentStatsLocked];
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(stats);
+        });
+    });
+}
+
+- (void)getAllDestinationIPsWithCompletion:(void (^)(NSSet<NSString *> *ips))completion {
+    if (!completion) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(self.statsQueue, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+
+        NSMutableSet<NSString *> *destinationIPs = [NSMutableSet set];
+
+        // Collect all unique destination IPs from connections
+        for (ConnectionTraffic *connection in strongSelf.connectionStats.allValues) {
+            if (connection.destinationAddress.length > 0) {
+                [destinationIPs addObject:connection.destinationAddress];
+            }
+        }
+
+        // Also collect from host stats (which tracks remote hosts)
+        for (HostTraffic *host in strongSelf.hostStats.allValues) {
+            if (host.address.length > 0) {
+                [destinationIPs addObject:host.address];
+            }
+        }
+
+        NSSet<NSString *> *result = [destinationIPs copy];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(result);
         });
     });
 }

@@ -4,6 +4,7 @@
 //
 
 #import "MenuBuilder.h"
+#import "MenuBuilder+ThreatDisplay.h"
 #import "ByteFormatter.h"
 #import "ConfigurationManager.h"
 #import "MapMenuView.h"
@@ -15,6 +16,29 @@
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 #import "Logger.h"
+
+static NSString *SNBStoredDeviceName(void) {
+    NSString *storedName = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeySelectedNetworkDevice];
+    if (storedName.length > 0) {
+        return storedName;
+    }
+
+    NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+                                                                      NSUserDomainMask,
+                                                                      YES);
+    if (paths.count == 0) {
+        return nil;
+    }
+    NSString *directory = [paths.firstObject stringByAppendingPathComponent:@"SniffNetBar"];
+    NSString *path = [directory stringByAppendingPathComponent:@"SelectedNetworkDevice.plist"];
+    NSDictionary<NSString *, id> *stored = [NSDictionary dictionaryWithContentsOfFile:path];
+    NSString *fileName = stored[@"name"];
+    if (fileName.length > 0) {
+        [[NSUserDefaults standardUserDefaults] setObject:fileName forKey:SNBUserDefaultsKeySelectedNetworkDevice];
+        return fileName;
+    }
+    return nil;
+}
 
 @interface MenuBuilder ()
 @property (nonatomic, strong) NSMenu *statusMenu;
@@ -37,6 +61,9 @@
 @property (nonatomic, assign) NSUInteger lastDeviceCount;
 @property (nonatomic, assign) BOOL lastThreatIntelEnabled;
 @property (nonatomic, assign) BOOL lastAssetMonitorEnabled;
+
+// Helper method for provider summary (used by category)
+- (NSString *)providerSummaryForResponse:(TIEnrichmentResponse *)response;
 @end
 
 @implementation MenuBuilder
@@ -434,9 +461,10 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     NSMutableAttributedString *statusDisplay = [[NSMutableAttributedString alloc] init];
 
     // Add device name if available
-    if (selectedDevice && selectedDevice.name) {
-        NSString *deviceName = [NSString stringWithFormat:@"[%@] ", selectedDevice.name];
-        NSAttributedString *deviceAttr = [[NSAttributedString alloc] initWithString:deviceName];
+    NSString *deviceName = selectedDevice.name ?: SNBStoredDeviceName();
+    if (deviceName.length > 0) {
+        NSString *prefix = [NSString stringWithFormat:@"[%@] ", deviceName];
+        NSAttributedString *deviceAttr = [[NSAttributedString alloc] initWithString:prefix];
         [statusDisplay appendAttributedString:deviceAttr];
     }
 
@@ -522,7 +550,13 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     NSMenuItem *deviceMenu = [[NSMenuItem alloc] initWithTitle:@"Network Interface" action:nil keyEquivalent:@""];
     NSMenu *deviceSubmenu = [[NSMenu alloc] init];
+    NSString *uiSelectedDeviceName = selectedDevice.name ?: SNBStoredDeviceName();
     NSArray<NetworkDevice *> *deviceList = devices ?: @[];
+
+    SNBLogUIDebug("Building device menu: selectedDevice=%s, storedDevice=%s, uiSelectedDeviceName=%s",
+                  selectedDevice.name ? selectedDevice.name.UTF8String : "(nil)",
+                  SNBStoredDeviceName() ? SNBStoredDeviceName().UTF8String : "(nil)",
+                  uiSelectedDeviceName ? uiSelectedDeviceName.UTF8String : "(nil)");
 
     for (NetworkDevice *device in deviceList) {
         NSMenuItem *deviceItem = [[NSMenuItem alloc] initWithTitle:[device displayName]
@@ -530,8 +564,9 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                                                      keyEquivalent:@""];
         deviceItem.target = target;
         deviceItem.representedObject = device;
-        if (selectedDevice && [device.name isEqualToString:selectedDevice.name]) {
+        if (uiSelectedDeviceName.length > 0 && [device.name isEqualToString:uiSelectedDeviceName]) {
             deviceItem.state = NSControlStateValueOn;
+            SNBLogUIDebug("Set checkmark on device: %s", device.name.UTF8String);
         }
         [deviceSubmenu addItem:deviceItem];
     }
@@ -803,8 +838,11 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     NSMenuItem *detailsItem = [[NSMenuItem alloc] initWithTitle:@"Details" action:nil keyEquivalent:@""];
     detailsItem.submenu = detailsSubmenu;
 
-    // Risk Overview - Show active connections + persistent threats
-    [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"SECURITY STATUS" style:@"header"]];
+    // ============================================================================
+    // PHASE 1 & 2: Unified Threat Display with Severity Grouping
+    // ============================================================================
+
+    [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"ACTIVE THREATS" style:@"header"]];
 
     if (!threatIntelEnabled) {
         NSMenuItem *disabledItem = [[NSMenuItem alloc] initWithTitle:@"✓ Threat Intel: Off"
@@ -825,94 +863,128 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         scanningItem.enabled = NO;
         [visualizationSubmenu addItem:scanningItem];
     } else {
-        // Build set of active destination IPs (from both hosts and connections for consistency)
-        NSMutableSet<NSString *> *activeDestIPs = [NSMutableSet set];
+        // Get ALL active destination IPs for accurate threat detection
+        NSSet<NSString *> *activeDestIPs = stats.allActiveDestinationIPs ?: [NSSet set];
 
-        // Primary source: destination IPs from active connections
-        for (ConnectionTraffic *conn in stats.topConnections) {
-            [activeDestIPs addObject:conn.destinationAddress];
-        }
+        // Categorize threats by severity level (High/Medium/Low)
+        NSDictionary<NSNumber *, NSArray<ThreatInfo *> *> *categorizedThreats =
+            [self categorizeThreats:threatIntelResults activeIPs:activeDestIPs stats:stats];
 
-        // Verify consistency with top hosts (should be the same set)
-        for (HostTraffic *host in stats.topHosts) {
-            [activeDestIPs addObject:host.address];
-        }
+        NSArray<ThreatInfo *> *highThreats = categorizedThreats[@(ThreatSeverityHigh)] ?: @[];
+        NSArray<ThreatInfo *> *mediumThreats = categorizedThreats[@(ThreatSeverityMedium)] ?: @[];
+        NSArray<ThreatInfo *> *lowThreats = categorizedThreats[@(ThreatSeverityLow)] ?: @[];
 
-        // Separate threats into: active, inactive dangerous, and clean
-        NSMutableArray<NSString *> *activeThreats = [NSMutableArray array];
-        NSMutableArray<NSString *> *inactiveThreats = [NSMutableArray array];
-        NSMutableArray<NSString *> *activeCleanIPs = [NSMutableArray array];
-
-        NSArray<NSString *> *sortedIPs = [self sortedThreatIPsFromResults:threatIntelResults];
-
-        for (NSString *ip in sortedIPs) {
-            TIScoringResult *scoring = threatIntelResults[ip].scoringResult;
-            if (!scoring) {
-                continue;
-            }
-
-            BOOL isActive = [activeDestIPs containsObject:ip];
-            BOOL isThreat = (scoring.verdict != TIThreatVerdictClean);
-
-            if (isThreat) {
-                // Threats are ALWAYS shown, whether active or not
-                if (isActive) {
-                    [activeThreats addObject:ip];
-                } else {
-                    [inactiveThreats addObject:ip];
-                }
-            } else if (isActive) {
-                // Clean IPs only shown if currently active
-                [activeCleanIPs addObject:ip];
+        // Separate active from historical
+        NSMutableArray<ThreatInfo *> *activeHighThreats = [NSMutableArray array];
+        NSMutableArray<ThreatInfo *> *historicalThreats = [NSMutableArray array];
+        for (ThreatInfo *threat in highThreats) {
+            if (threat.isActive) {
+                [activeHighThreats addObject:threat];
+            } else {
+                [historicalThreats addObject:threat];
             }
         }
 
-        NSUInteger totalThreats = activeThreats.count + inactiveThreats.count;
+        NSMutableArray<ThreatInfo *> *activeMediumThreats = [NSMutableArray array];
+        for (ThreatInfo *threat in mediumThreats) {
+            if (threat.isActive) {
+                [activeMediumThreats addObject:threat];
+            } else {
+                [historicalThreats addObject:threat];
+            }
+        }
+
+        NSMutableArray<ThreatInfo *> *activeLowThreats = [NSMutableArray array];
+        for (ThreatInfo *threat in lowThreats) {
+            if (threat.isActive) {
+                [activeLowThreats addObject:threat];
+            } else {
+                [historicalThreats addObject:threat];
+            }
+        }
+
+        NSUInteger totalActiveThreats = activeHighThreats.count + activeMediumThreats.count + activeLowThreats.count;
 
         // Show threat summary
-        if (totalThreats > 0) {
-            NSMenuItem *alertItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"⚠️  %lu Threat%@ Detected",
-                                                                      (unsigned long)totalThreats,
-                                                                      totalThreats == 1 ? @"" : @"s"]
+        if (totalActiveThreats > 0) {
+            // Summary count with breakdown
+            NSString *summaryTitle;
+            if (activeHighThreats.count > 0 && activeMediumThreats.count > 0) {
+                summaryTitle = [NSString stringWithFormat:@"⚠️  %lu Active Threat%@ (%lu High, %lu Med)",
+                               (unsigned long)totalActiveThreats,
+                               totalActiveThreats == 1 ? @"" : @"s",
+                               (unsigned long)activeHighThreats.count,
+                               (unsigned long)activeMediumThreats.count];
+            } else if (activeHighThreats.count > 0) {
+                summaryTitle = [NSString stringWithFormat:@"⚠️  %lu High Severity Threat%@",
+                               (unsigned long)activeHighThreats.count,
+                               activeHighThreats.count == 1 ? @"" : @"s"];
+            } else {
+                summaryTitle = [NSString stringWithFormat:@"⚠️  %lu Active Threat%@",
+                               (unsigned long)totalActiveThreats,
+                               totalActiveThreats == 1 ? @"" : @"s"];
+            }
+
+            NSMenuItem *alertItem = [[NSMenuItem alloc] initWithTitle:summaryTitle
                                                               action:nil
                                                        keyEquivalent:@""];
             alertItem.enabled = NO;
-            NSFont *boldFont = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+            NSFont *boldFont = [NSFont boldSystemFontOfSize:13.0];
             NSDictionary *attributes = @{NSFontAttributeName: boldFont,
                                        NSForegroundColorAttributeName: [NSColor systemRedColor]};
-            alertItem.attributedTitle = [[NSAttributedString alloc] initWithString:alertItem.title
+            alertItem.attributedTitle = [[NSAttributedString alloc] initWithString:summaryTitle
                                                                         attributes:attributes];
             [visualizationSubmenu addItem:alertItem];
 
-            // Show ACTIVE threats first (currently happening!)
-            for (NSString *ip in activeThreats) {
-                TIScoringResult *scoring = threatIntelResults[ip].scoringResult;
-                NSMenuItem *threatItem = [self threatBadgeItemWithIP:ip scoring:scoring];
-                [visualizationSubmenu addItem:threatItem];
-            }
+            // HIGH SEVERITY THREATS (Always visible)
+            if (activeHighThreats.count > 0) {
+                [visualizationSubmenu addItem:[self severityHeaderForLevel:ThreatSeverityHigh count:activeHighThreats.count]];
 
-            // Show INACTIVE threats (were dangerous, connection now closed - persistent warning)
-            if (inactiveThreats.count > 0) {
-                for (NSString *ip in inactiveThreats) {
-                    TIScoringResult *scoring = threatIntelResults[ip].scoringResult;
-                    NSString *verdictStr = [scoring verdictString];
-                    NSString *displayStr = [NSString stringWithFormat:@"  %@ - %@ (%ld) [CLOSED]",
-                                          ip, verdictStr, (long)scoring.finalScore];
-
-                    NSMenuItem *threatItem = [[NSMenuItem alloc] initWithTitle:displayStr
-                                                                       action:nil
-                                                                keyEquivalent:@""];
-                    threatItem.enabled = NO;
-                    NSFont *font = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
-                    NSDictionary *attrs = @{NSFontAttributeName: font,
-                                          NSForegroundColorAttributeName: [NSColor secondaryLabelColor]};
-                    threatItem.attributedTitle = [[NSAttributedString alloc] initWithString:displayStr
-                                                                                 attributes:attrs];
-                    [visualizationSubmenu addItem:threatItem];
+                for (ThreatInfo *threat in activeHighThreats) {
+                    [visualizationSubmenu addItem:[self enhancedThreatItemForThreat:threat]];
+                    [visualizationSubmenu addItem:[self threatDetailItemForThreat:threat]];
+                    NSMenuItem *connItem = [self threatConnectionItemForThreat:threat];
+                    if (connItem) {
+                        [visualizationSubmenu addItem:connItem];
+                    }
                 }
             }
+
+            // MEDIUM SEVERITY THREATS (Always visible)
+            if (activeMediumThreats.count > 0) {
+                [visualizationSubmenu addItem:[self severityHeaderForLevel:ThreatSeverityMedium count:activeMediumThreats.count]];
+
+                for (ThreatInfo *threat in activeMediumThreats) {
+                    [visualizationSubmenu addItem:[self enhancedThreatItemForThreat:threat]];
+                    [visualizationSubmenu addItem:[self threatDetailItemForThreat:threat]];
+                    NSMenuItem *connItem = [self threatConnectionItemForThreat:threat];
+                    if (connItem) {
+                        [visualizationSubmenu addItem:connItem];
+                    }
+                }
+            }
+
+            // LOW SEVERITY THREATS (Expandable - collapsed by default)
+            if (activeLowThreats.count > 0) {
+                NSString *expandIndicator = self.showLowSeverityThreats ? @"▼" : @"▶";
+                NSString *lowTitle = [NSString stringWithFormat:@"%@ 🟢 LOW SEVERITY (%lu)",
+                                     expandIndicator, (unsigned long)activeLowThreats.count];
+                NSMenuItem *lowToggle = [[NSMenuItem alloc] initWithTitle:lowTitle
+                                                                  action:@selector(toggleShowLowSeverityThreats)
+                                                           keyEquivalent:@""];
+                lowToggle.target = self;
+                [visualizationSubmenu addItem:lowToggle];
+
+                if (self.showLowSeverityThreats) {
+                    for (ThreatInfo *threat in activeLowThreats) {
+                        [visualizationSubmenu addItem:[self enhancedThreatItemForThreat:threat]];
+                        [visualizationSubmenu addItem:[self threatDetailItemForThreat:threat]];
+                    }
+                }
+            }
+
         } else {
-            NSMenuItem *cleanItem = [[NSMenuItem alloc] initWithTitle:@"✓ No Threats Detected"
+            NSMenuItem *cleanItem = [[NSMenuItem alloc] initWithTitle:@"✓ No Active Threats"
                                                               action:nil
                                                        keyEquivalent:@""];
             cleanItem.enabled = NO;
@@ -924,13 +996,39 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
             [visualizationSubmenu addItem:cleanItem];
         }
 
-        // Expandable clean connections section (only active)
+        // HISTORICAL THREATS (Expandable - collapsed by default)
+        if (historicalThreats.count > 0) {
+            NSString *expandIndicator = self.showHistoricalThreats ? @"▼" : @"▶";
+            NSString *histTitle = [NSString stringWithFormat:@"%@ Previous Threats (%lu closed)",
+                                  expandIndicator, (unsigned long)historicalThreats.count];
+            NSMenuItem *histToggle = [[NSMenuItem alloc] initWithTitle:histTitle
+                                                                action:@selector(toggleShowHistoricalThreats)
+                                                         keyEquivalent:@""];
+            histToggle.target = self;
+            [visualizationSubmenu addItem:histToggle];
+
+            if (self.showHistoricalThreats) {
+                for (ThreatInfo *threat in historicalThreats) {
+                    [visualizationSubmenu addItem:[self enhancedThreatItemForThreat:threat]];
+                    [visualizationSubmenu addItem:[self threatDetailItemForThreat:threat]];
+                }
+            }
+        }
+
+        // CLEAN CONNECTIONS (Expandable - collapsed by default)
+        NSMutableArray<NSString *> *activeCleanIPs = [NSMutableArray array];
+        for (NSString *ip in threatIntelResults) {
+            TIEnrichmentResponse *response = threatIntelResults[ip];
+            TIScoringResult *scoring = response.scoringResult;
+            if (scoring && scoring.verdict == TIThreatVerdictClean && [activeDestIPs containsObject:ip]) {
+                [activeCleanIPs addObject:ip];
+            }
+        }
+
         if (activeCleanIPs.count > 0) {
             NSString *expandIndicator = self.showCleanConnections ? @"▼" : @"▶";
-            NSString *cleanTitle = [NSString stringWithFormat:@"%@ %lu Clean Connection%@",
-                                   expandIndicator,
-                                   (unsigned long)activeCleanIPs.count,
-                                   activeCleanIPs.count == 1 ? @"" : @"s"];
+            NSString *cleanTitle = [NSString stringWithFormat:@"%@ Clean Connections (%lu)",
+                                   expandIndicator, (unsigned long)activeCleanIPs.count];
             NSMenuItem *cleanToggle = [[NSMenuItem alloc] initWithTitle:cleanTitle
                                                                 action:@selector(toggleShowCleanConnections)
                                                          keyEquivalent:@""];
@@ -941,14 +1039,30 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                 NSUInteger limit = MIN(10, activeCleanIPs.count);
                 for (NSUInteger i = 0; i < limit; i++) {
                     NSString *ip = activeCleanIPs[i];
-                    TIScoringResult *scoring = threatIntelResults[ip].scoringResult;
-                    NSString *displayStr = [NSString stringWithFormat:@"  %@ - ✓ Clean (%.0f%%)",
-                                          ip, scoring.confidence * 100];
-                    NSMenuItem *cleanIPItem = [[NSMenuItem alloc] initWithTitle:displayStr
-                                                                        action:nil
-                                                                 keyEquivalent:@""];
-                    cleanIPItem.enabled = NO;
-                    [visualizationSubmenu addItem:cleanIPItem];
+                    TIEnrichmentResponse *response = threatIntelResults[ip];
+
+                    // Create ThreatInfo for clean connection to use enhanced display
+                    ThreatInfo *cleanInfo = [[ThreatInfo alloc] init];
+                    cleanInfo.ipAddress = ip;
+                    cleanInfo.response = response;
+                    cleanInfo.severityLevel = ThreatSeverityNone;
+                    cleanInfo.score = 0;
+                    cleanInfo.isActive = YES;
+                    cleanInfo.totalBytes = [self totalBytesForIP:ip inStats:stats];
+
+                    NSArray<ConnectionTraffic *> *connections = [self connectionsForIP:ip inStats:stats];
+                    cleanInfo.connectionCount = connections.count;
+                    if (connections.count > 0) {
+                        cleanInfo.primaryConnection = connections[0];
+                    }
+
+                    // Display using enhanced format (3 lines)
+                    [visualizationSubmenu addItem:[self enhancedThreatItemForThreat:cleanInfo]];
+                    [visualizationSubmenu addItem:[self threatDetailItemForThreat:cleanInfo]];
+                    NSMenuItem *connItem = [self threatConnectionItemForThreat:cleanInfo];
+                    if (connItem) {
+                        [visualizationSubmenu addItem:connItem];
+                    }
                 }
                 if (activeCleanIPs.count > limit) {
                     NSMenuItem *moreItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"  ... and %lu more",
@@ -1245,104 +1359,9 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         [detailsSubmenu addItem:statusItem];
     } else if (threatIntelEnabled && threatIntelResults.count > 0) {
         // Build set of active destination IPs
-        NSMutableSet<NSString *> *activeIPs = [NSMutableSet set];
-        for (ConnectionTraffic *conn in stats.topConnections) {
-            [activeIPs addObject:conn.destinationAddress];
-        }
-        for (HostTraffic *host in stats.topHosts) {
-            [activeIPs addObject:host.address];
-        }
-
-        // Separate into active and inactive (but dangerous) results
-        NSMutableArray<NSString *> *activeThreats = [NSMutableArray array];
-        NSMutableArray<NSString *> *inactiveThreats = [NSMutableArray array];
-        NSMutableArray<NSString *> *activeClean = [NSMutableArray array];
-
-        NSArray<NSString *> *sortedIPs = [self sortedThreatIPsFromResults:threatIntelResults];
-        for (NSString *ip in sortedIPs) {
-            TIScoringResult *scoring = threatIntelResults[ip].scoringResult;
-            if (!scoring) {
-                continue;
-            }
-
-            BOOL isActive = [activeIPs containsObject:ip];
-            BOOL isThreat = (scoring.verdict != TIThreatVerdictClean);
-
-            if (isThreat) {
-                if (isActive) {
-                    [activeThreats addObject:ip];
-                } else {
-                    [inactiveThreats addObject:ip];
-                }
-            } else if (isActive) {
-                [activeClean addObject:ip];
-            }
-        }
-
-        NSUInteger totalToShow = activeThreats.count + inactiveThreats.count + activeClean.count;
-        if (totalToShow > 0) {
-            [detailsSubmenu addItem:[NSMenuItem separatorItem]];
-            NSMenuItem *threatTitle = [[NSMenuItem alloc] initWithTitle:@"THREAT INTELLIGENCE" action:nil keyEquivalent:@""];
-            threatTitle.enabled = NO;
-            [detailsSubmenu addItem:threatTitle];
-
-            // Show active threats first
-            for (NSString *ip in activeThreats) {
-                TIEnrichmentResponse *response = threatIntelResults[ip];
-                if (response.scoringResult) {
-                    TIScoringResult *scoring = response.scoringResult;
-                    NSString *verdictStr = [scoring verdictString];
-
-                    NSString *displayStr = [NSString stringWithFormat:@"  %@ - %@ (%ld)",
-                                            ip, verdictStr, (long)scoring.finalScore];
-
-                    NSMenuItem *threatItem = [[NSMenuItem alloc] initWithTitle:displayStr
-                                                                       action:nil
-                                                                keyEquivalent:@""];
-                    threatItem.enabled = NO;
-                    [detailsSubmenu addItem:threatItem];
-                }
-            }
-
-            // Show inactive threats (persistent warnings for closed dangerous connections)
-            for (NSString *ip in inactiveThreats) {
-                TIEnrichmentResponse *response = threatIntelResults[ip];
-                if (response.scoringResult) {
-                    TIScoringResult *scoring = response.scoringResult;
-                    NSString *verdictStr = [scoring verdictString];
-                    NSString *displayStr = [NSString stringWithFormat:@"  %@ - %@ (%ld) [CLOSED]",
-                                            ip, verdictStr, (long)scoring.finalScore];
-
-                    NSMenuItem *threatItem = [[NSMenuItem alloc] initWithTitle:displayStr
-                                                                       action:nil
-                                                                keyEquivalent:@""];
-                    threatItem.enabled = NO;
-                    NSFont *font = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
-                    NSDictionary *attrs = @{NSFontAttributeName: font,
-                                          NSForegroundColorAttributeName: [NSColor secondaryLabelColor]};
-                    threatItem.attributedTitle = [[NSAttributedString alloc] initWithString:displayStr
-                                                                                 attributes:attrs];
-                    [detailsSubmenu addItem:threatItem];
-                }
-            }
-
-            // Show active clean connections
-            for (NSString *ip in activeClean) {
-                TIEnrichmentResponse *response = threatIntelResults[ip];
-                if (response.scoringResult) {
-                    TIScoringResult *scoring = response.scoringResult;
-                    NSString *verdictStr = [scoring verdictString];
-                    NSString *displayStr = [NSString stringWithFormat:@"  %@ - %@ (%ld)",
-                                            ip, verdictStr, (long)scoring.finalScore];
-
-                    NSMenuItem *threatItem = [[NSMenuItem alloc] initWithTitle:displayStr
-                                                                       action:nil
-                                                                keyEquivalent:@""];
-                    threatItem.enabled = NO;
-                    [detailsSubmenu addItem:threatItem];
-                }
-            }
-        }
+        // Note: The old THREAT INTELLIGENCE display has been removed.
+        // See the new "ACTIVE THREATS" section in the main Visualization menu
+        // for the enhanced severity-based threat display.
 
         NSArray<NSDictionary *> *maliciousConnections = [self maliciousConnectionsFromStats:stats
                                                                         threatIntelResults:threatIntelResults];
@@ -1434,6 +1453,22 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 - (void)toggleShowProviderDetails {
     self.showProviderDetails = !self.showProviderDetails;
     SNBLogUIDebug("Toggled provider details: %d", self.showProviderDetails);
+    if ([self.delegate respondsToSelector:@selector(menuBuilderNeedsVisualizationRefresh:)]) {
+        [self.delegate menuBuilderNeedsVisualizationRefresh:self];
+    }
+}
+
+- (void)toggleShowLowSeverityThreats {
+    self.showLowSeverityThreats = !self.showLowSeverityThreats;
+    SNBLogUIDebug("Toggled low severity threats: %d", self.showLowSeverityThreats);
+    if ([self.delegate respondsToSelector:@selector(menuBuilderNeedsVisualizationRefresh:)]) {
+        [self.delegate menuBuilderNeedsVisualizationRefresh:self];
+    }
+}
+
+- (void)toggleShowHistoricalThreats {
+    self.showHistoricalThreats = !self.showHistoricalThreats;
+    SNBLogUIDebug("Toggled historical threats: %d", self.showHistoricalThreats);
     if ([self.delegate respondsToSelector:@selector(menuBuilderNeedsVisualizationRefresh:)]) {
         [self.delegate menuBuilderNeedsVisualizationRefresh:self];
     }

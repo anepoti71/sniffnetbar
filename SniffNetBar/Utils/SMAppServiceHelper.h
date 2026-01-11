@@ -16,6 +16,14 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)helperBinaryExists;
 + (BOOL)helperPlistProgramArgumentsMatch;
 
+// Helpers for inspecting non-bundled installations (e.g., status_helper CLI)
++ (NSString *)helperBinaryPathForBundlePath:(NSString *)bundlePath;
++ (NSString *)helperPlistPathForBundlePath:(NSString *)bundlePath;
++ (BOOL)helperBinaryExistsAtBundlePath:(NSString *)bundlePath;
++ (BOOL)helperPlistProgramArgumentsMatchForBundlePath:(NSString *)bundlePath;
+
++ (NSString *)helperStatusForLegacyPlistPath:(NSString *)plistPath;
+
 @end
 
 NS_ASSUME_NONNULL_END

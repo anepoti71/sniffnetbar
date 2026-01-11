@@ -31,6 +31,8 @@
 @property (nonatomic, assign) BOOL showCleanConnections;
 @property (nonatomic, assign) BOOL showAllAssets;
 @property (nonatomic, assign) BOOL showProviderDetails;
+@property (nonatomic, assign) BOOL showLowSeverityThreats;
+@property (nonatomic, assign) BOOL showHistoricalThreats;
 
 - (instancetype)initWithMenu:(NSMenu *)menu
                   statusItem:(NSStatusItem *)statusItem
@@ -63,5 +65,7 @@
 - (void)toggleShowCleanConnections;
 - (void)toggleShowAllAssets;
 - (void)toggleShowProviderDetails;
+- (void)toggleShowLowSeverityThreats;
+- (void)toggleShowHistoricalThreats;
 
 @end

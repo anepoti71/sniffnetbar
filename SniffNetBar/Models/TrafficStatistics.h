@@ -14,6 +14,7 @@
 - (void)processPacket:(PacketInfo *)packetInfo;
 - (TrafficStats *)getCurrentStats;
 - (void)getCurrentStatsWithCompletion:(void (^)(TrafficStats *stats))completion;
+- (void)getAllDestinationIPsWithCompletion:(void (^)(NSSet<NSString *> *ips))completion;
 - (void)reset;
 
 @end
@@ -27,6 +28,7 @@
 @property (nonatomic, assign) uint64_t bytesPerSecond;
 @property (nonatomic, strong) NSArray<HostTraffic *> *topHosts;
 @property (nonatomic, strong) NSArray<ConnectionTraffic *> *topConnections;
+@property (nonatomic, strong) NSSet<NSString *> *allActiveDestinationIPs;
 
 @end
 

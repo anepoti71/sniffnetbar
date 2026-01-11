@@ -196,31 +196,26 @@
 }
 
 - (void)enrichStatsForThreatIntel:(TrafficStats *)stats {
-    if (!self.threatIntelCoordinator.isEnabled || !stats) {
+    if (!self.threatIntelCoordinator.isEnabled) {
         return;
     }
 
-    for (HostTraffic *host in stats.topHosts) {
-        if (host.address.length == 0) {
-            continue;
+    // Get ALL unique destination IPs (not just top connections) for comprehensive threat detection
+    __weak typeof(self) weakSelf = self;
+    [self.statistics getAllDestinationIPsWithCompletion:^(NSSet<NSString *> *destinationIPs) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
         }
-        [self.threatIntelCoordinator enrichIPIfNeeded:host.address completion:^{
-            [self scheduleMenuRefresh];
-        }];
-    }
 
-    for (ConnectionTraffic *connection in stats.topConnections) {
-        if (connection.sourceAddress.length > 0) {
-            [self.threatIntelCoordinator enrichIPIfNeeded:connection.sourceAddress completion:^{
-                [self scheduleMenuRefresh];
+        // Enrich every destination IP for threat intelligence
+        // enrichIPIfNeeded uses caching, so this won't overwhelm the API
+        for (NSString *ip in destinationIPs) {
+            [strongSelf.threatIntelCoordinator enrichIPIfNeeded:ip completion:^{
+                [strongSelf scheduleMenuRefresh];
             }];
         }
-        if (connection.destinationAddress.length > 0) {
-            [self.threatIntelCoordinator enrichIPIfNeeded:connection.destinationAddress completion:^{
-                [self scheduleMenuRefresh];
-            }];
-        }
-    }
+    }];
 }
 
 - (void)updateMenu {
@@ -237,29 +232,6 @@
 - (void)updateMenuWithStats:(TrafficStats *)stats {
     self.menuBuilder.dailyStatsEnabled = self.statisticsHistory.isEnabled;
     self.menuBuilder.statsReportAvailable = [self.statisticsHistory reportExists];
-
-    // Aggressive threat intel enrichment: enrich ALL active connections and hosts
-    if (self.threatIntelCoordinator.isEnabled) {
-        // Enrich all top connections (both source and destination)
-        for (ConnectionTraffic *connection in stats.topConnections) {
-            [self.threatIntelCoordinator enrichIPIfNeeded:connection.sourceAddress
-                                               completion:^{
-                [self scheduleMenuRefresh];
-            }];
-            [self.threatIntelCoordinator enrichIPIfNeeded:connection.destinationAddress
-                                               completion:^{
-                [self scheduleMenuRefresh];
-            }];
-        }
-
-        // Enrich all top hosts for comprehensive threat detection
-        for (HostTraffic *host in stats.topHosts) {
-            [self.threatIntelCoordinator enrichIPIfNeeded:host.address
-                                               completion:^{
-                [self scheduleMenuRefresh];
-            }];
-        }
-    }
 
     [self.menuBuilder updateMenuWithStats:stats
                                   devices:self.deviceManager.availableDevices

@@ -11,6 +11,86 @@
 #import "Logger.h"
 #import <math.h>
 
+static NSString *SNBSelectedDeviceStorageDirectory(void) {
+    NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+                                                                      NSUserDomainMask,
+                                                                      YES);
+    if (paths.count == 0) {
+        return nil;
+    }
+    NSString *directory = [paths.firstObject stringByAppendingPathComponent:@"SniffNetBar"];
+    return directory;
+}
+
+static NSString *SNBSelectedDeviceStoragePath(void) {
+    NSString *directory = SNBSelectedDeviceStorageDirectory();
+    if (directory.length == 0) {
+        return nil;
+    }
+    return [directory stringByAppendingPathComponent:@"SelectedNetworkDevice.plist"];
+}
+
+static void SNBSynchronizeSelectedDeviceStorageDirectory(void) {
+    NSString *directory = SNBSelectedDeviceStorageDirectory();
+    if (directory.length == 0) {
+        return;
+    }
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+}
+
+static NSDictionary<NSString *, id> *SNBLoadSavedDeviceInfo(void) {
+    NSString *path = SNBSelectedDeviceStoragePath();
+    NSDictionary<NSString *, id> *stored = nil;
+    if (path.length > 0) {
+        stored = [NSDictionary dictionaryWithContentsOfFile:path];
+    }
+
+    NSString *savedName = stored[@"name"];
+    NSArray<NSString *> *addresses = stored[@"addresses"];
+    if (savedName.length == 0 && (!addresses || addresses.count == 0)) {
+        NSString *defaultsName = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeySelectedNetworkDevice];
+        if (defaultsName.length > 0) {
+            return @{@"name": defaultsName};
+        }
+        return nil;
+    }
+
+    NSMutableDictionary<NSString *, id> *info = [NSMutableDictionary dictionary];
+    if (savedName.length > 0) {
+        info[@"name"] = savedName;
+        [[NSUserDefaults standardUserDefaults] setObject:savedName forKey:SNBUserDefaultsKeySelectedNetworkDevice];
+    }
+    if (addresses) {
+        info[@"addresses"] = [addresses copy];
+    }
+    return [info copy];
+}
+
+static BOOL SNBSaveSelectedDeviceInfo(NetworkDevice *device) {
+    if (!device || device.name.length == 0) {
+        return NO;
+    }
+
+    NSString *name = device.name;
+    NSArray<NSString *> *addresses = device.addresses ?: @[];
+    SNBSynchronizeSelectedDeviceStorageDirectory();
+    NSString *path = SNBSelectedDeviceStoragePath();
+    if (path.length == 0) {
+        return NO;
+    }
+
+    NSDictionary *info = @{@"name": name,
+                           @"addresses": addresses};
+    BOOL success = [info writeToFile:path atomically:YES];
+    if (success) {
+        [[NSUserDefaults standardUserDefaults] setObject:name forKey:SNBUserDefaultsKeySelectedNetworkDevice];
+    }
+    return success;
+}
+
 @interface DeviceManager ()
 @property (nonatomic, strong) ConfigurationManager *configuration;
 @property (nonatomic, strong, readwrite) PacketCaptureManager *packetManager;
@@ -39,19 +119,62 @@
 }
 
 - (void)restoreSelectedDevice {
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    NSString *savedDeviceName = [defaults stringForKey:SNBUserDefaultsKeySelectedNetworkDevice];
+    NSDictionary<NSString *, id> *savedInfo = SNBLoadSavedDeviceInfo();
+    NSString *savedDeviceName = savedInfo[@"name"];
+    NSSet<NSString *> *savedAddresses = savedInfo[@"addresses"] ? [NSSet setWithArray:savedInfo[@"addresses"]] : nil;
 
-    if (savedDeviceName) {
-        for (NetworkDevice *device in self.availableDevices) {
-            if ([device.name isEqualToString:savedDeviceName]) {
-                self.selectedDevice = device;
-                return;
+    // Log all available devices for debugging
+    SNBLogNetworkInfo("Available devices: %lu", (unsigned long)self.availableDevices.count);
+    for (NetworkDevice *d in self.availableDevices) {
+        SNBLogNetworkInfo("  - %{public}@ (addresses: %{public}@)", d.name, [d.addresses componentsJoinedByString:@", "]);
+    }
+
+    if (savedDeviceName.length > 0 || savedAddresses.count > 0) {
+        SNBLogNetworkInfo("Attempting to restore saved device: %{public}@ (addresses: %{public}@)",
+                          savedDeviceName ?: @"<unknown>",
+                          savedAddresses.count > 0 ? [[savedAddresses allObjects] componentsJoinedByString:@", "] : @"none");
+
+        // First try: exact name match (most reliable)
+        if (savedDeviceName.length > 0) {
+            for (NetworkDevice *device in self.availableDevices) {
+                if ([device.name isEqualToString:savedDeviceName]) {
+                    self.selectedDevice = device;
+                    SNBLogNetworkInfo("Successfully restored device: %{public}@ (matched by name)", device.name);
+                    return;
+                }
             }
         }
+
+        // Second try: address match (for devices that changed names but kept IPs)
+        if (savedAddresses.count > 0) {
+            for (NetworkDevice *device in self.availableDevices) {
+                if (device.addresses.count > 0) {
+                    NSSet<NSString *> *deviceAddresses = [NSSet setWithArray:device.addresses];
+                    if ([savedAddresses intersectsSet:deviceAddresses]) {
+                        self.selectedDevice = device;
+                        SNBLogNetworkInfo("Successfully restored device: %{public}@ (matched by address, was: %{public}@)",
+                                          device.name, savedDeviceName ?: @"<unknown>");
+                        // Update saved name to new name
+                        [self saveSelectedDevice];
+                        return;
+                    }
+                }
+            }
+        }
+
+        SNBLogNetworkWarn("Saved device '%{public}@' not found in available devices, falling back to default",
+                          savedDeviceName ?: @"<unknown>");
+    } else {
+        SNBLogNetworkInfo("No saved device found, using default device");
     }
 
     self.selectedDevice = [NetworkDevice defaultDevice];
+
+    // Save the default device so next launch uses the same device
+    if (self.selectedDevice) {
+        SNBLogNetworkInfo("Saving default device: %{public}@", self.selectedDevice.name);
+        [self saveSelectedDevice];
+    }
 }
 
 - (void)saveSelectedDevice {
@@ -59,6 +182,12 @@
         NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
         [defaults setObject:self.selectedDevice.name forKey:SNBUserDefaultsKeySelectedNetworkDevice];
         [defaults synchronize];
+        SNBLogNetworkInfo("Saved selected device to UserDefaults: %{public}@", self.selectedDevice.name);
+        if (SNBSaveSelectedDeviceInfo(self.selectedDevice)) {
+            SNBLogNetworkInfo("Persisted selected device to Application Support storage");
+        } else {
+            SNBLogNetworkWarn("Failed to persist selected device to storage");
+        }
     }
 }
 
@@ -167,6 +296,8 @@
         return NO;
     }
 
+    SNBLogNetworkInfo("User selected device: %{public}@ (previous: %{public}@)",
+                      device.name, self.selectedDevice.name ?: @"none");
     self.selectedDevice = device;
     [self saveSelectedDevice];
     [self startCaptureWithError:error];

@@ -19,36 +19,60 @@ static BOOL SNBSetError(NSError **error, NSInteger code, NSString *message) {
     return NO;
 }
 
-+ (NSString *)helperPlistPath {
-    NSString *bundlePath = [NSBundle mainBundle].bundlePath;
+static NSString *SNBHelperLaunchDaemonPlistPath(NSString *bundlePath) {
+    if (bundlePath.length == 0) {
+        return nil;
+    }
     return [bundlePath stringByAppendingPathComponent:
             @"Contents/Library/LaunchDaemons/com.sniffnetbar.helper.plist"];
 }
 
-+ (NSString *)helperBinaryPath {
-    NSString *bundlePath = [NSBundle mainBundle].bundlePath;
+static NSString *SNBHelperBinaryPath(NSString *bundlePath) {
+    if (bundlePath.length == 0) {
+        return nil;
+    }
     return [bundlePath stringByAppendingPathComponent:
             @"Contents/Library/LaunchDaemons/com.sniffnetbar.helper.app/Contents/MacOS/com.sniffnetbar.helper"];
+}
+
+API_AVAILABLE(macos(13.0))
+static SMAppService * _Nullable SNBCurrentHelperService(void) {
+    return [SMAppService daemonServiceWithPlistName:@"com.sniffnetbar.helper.plist"];
+}
+
+static BOOL SNBIsHelperServiceAvailable(void) {
+    if (@available(macOS 13.0, *)) {
+        return SNBCurrentHelperService() != nil;
+    }
+    return NO;
+}
+
++ (NSString *)helperPlistPath {
+    return SNBHelperLaunchDaemonPlistPath([NSBundle mainBundle].bundlePath);
+}
+
++ (NSString *)helperBinaryPath {
+    return SNBHelperBinaryPath([NSBundle mainBundle].bundlePath);
 }
 
 + (BOOL)helperPlistProgramArgumentsMatch {
     NSString *plistPath = [self helperPlistPath];
     NSMutableDictionary *plist = [NSMutableDictionary dictionaryWithContentsOfFile:plistPath];
     if (!plist) {
-        SNBLogWarn("Helper plist not found or unreadable at %{public}@", plistPath);
+        SNBLogWarn("Helper plist not found or unreadable at %@", plistPath);
         return NO;
     }
 
     NSString *binaryPath = [self helperBinaryPath];
     NSArray *arguments = plist[@"ProgramArguments"];
     if (arguments.count == 0) {
-        SNBLogWarn("Helper plist ProgramArguments missing at %{public}@", plistPath);
+        SNBLogWarn("Helper plist ProgramArguments missing at %@", plistPath);
         return NO;
     }
 
     NSString *currentPath = arguments.firstObject;
     if (![currentPath isEqualToString:binaryPath]) {
-        SNBLogWarn("Helper plist ProgramArguments mismatch. Expected %{public}@, found %{public}@",
+        SNBLogWarn("Helper plist ProgramArguments mismatch. Expected %@, found %@",
                    binaryPath, currentPath);
         return NO;
     }
@@ -101,111 +125,159 @@ static BOOL SNBSetError(NSError **error, NSInteger code, NSString *message) {
         return SNBSetError(error, 6, @"Failed to update helper plist ProgramArguments.");
     }
 
-    SNBLogInfo("Updated helper plist ProgramArguments to %{public}@", binaryPath);
+    SNBLogInfo("Updated helper plist ProgramArguments to %@", binaryPath);
     return YES;
+}
+
++ (NSString *)helperBinaryPathForBundlePath:(NSString *)bundlePath {
+    return SNBHelperBinaryPath(bundlePath);
+}
+
++ (NSString *)helperPlistPathForBundlePath:(NSString *)bundlePath {
+    return SNBHelperLaunchDaemonPlistPath(bundlePath);
+}
+
++ (BOOL)helperBinaryExistsAtBundlePath:(NSString *)bundlePath {
+    NSString *binaryPath = [self helperBinaryPathForBundlePath:bundlePath];
+    if (binaryPath.length == 0) {
+        return NO;
+    }
+    return [[NSFileManager defaultManager] fileExistsAtPath:binaryPath];
+}
+
++ (BOOL)helperPlistProgramArgumentsMatchForBundlePath:(NSString *)bundlePath {
+    NSString *plistPath = [self helperPlistPathForBundlePath:bundlePath];
+    NSMutableDictionary *plist = [NSMutableDictionary dictionaryWithContentsOfFile:plistPath];
+    if (!plist) {
+        return NO;
+    }
+
+    NSArray *arguments = plist[@"ProgramArguments"];
+    if (arguments.count == 0) {
+        return NO;
+    }
+
+    NSString *currentPath = arguments.firstObject;
+    NSString *expectedPath = [self helperBinaryPathForBundlePath:bundlePath];
+    return [currentPath isEqualToString:expectedPath];
 }
 
 + (BOOL)helperBinaryExists {
-    NSString *binaryPath = [self helperBinaryPath];
-    BOOL exists = [[NSFileManager defaultManager] fileExistsAtPath:binaryPath];
-    if (!exists) {
-        SNBLogWarn("Helper binary missing at %{public}@", binaryPath);
-    }
-    return exists;
+    return [self helperBinaryExistsAtBundlePath:[NSBundle mainBundle].bundlePath];
 }
 
-+ (SMAppService *)helperService {
-    return [SMAppService daemonServiceWithPlistName:@"com.sniffnetbar.helper.plist"];
++ (SMAppService *)helperService API_AVAILABLE(macos(13.0)) {
+    return SNBCurrentHelperService();
 }
 
 + (BOOL)isHelperInstalled {
-    if (![self helperBinaryExists]) {
+    if (![self helperBinaryExists] || ![self helperPlistProgramArgumentsMatch]) {
         return NO;
     }
 
-    if (![self helperPlistProgramArgumentsMatch]) {
+    if (!SNBIsHelperServiceAvailable()) {
         return NO;
     }
 
-    SMAppService *service = [self helperService];
-    SMAppServiceStatus status = service.status;
-    SNBLogInfo("Helper daemon status check: %ld", (long)status);
-    if (status != SMAppServiceStatusEnabled) {
-        return NO;
+    if (@available(macOS 13.0, *)) {
+        SMAppService *service = [self helperService];
+        SMAppServiceStatus status = service.status;
+        return status == SMAppServiceStatusEnabled;
     }
-
-    return YES;
+    return NO;
 }
 
 + (BOOL)installHelperWithError:(NSError **)error {
     if (![self helperBinaryExists]) {
-        if (error && *error == nil) {
-            *error = [NSError errorWithDomain:@"SMAppServiceHelper"
-                                         code:2
-                                     userInfo:@{NSLocalizedDescriptionKey:
-                                                    @"Helper binary missing from app bundle. Rebuild and reinstall the app."}];
-        }
-        return NO;
+        return SNBSetError(error, 2,
+                           @"Helper binary missing from app bundle. Rebuild and reinstall the app.");
     }
 
     if (![self ensureHelperPlistProgramArgumentsWithError:error]) {
         return NO;
     }
 
-    SMAppService *service = [self helperService];
-    SMAppServiceStatus status = service.status;
+    if (@available(macOS 13.0, *)) {
+        SMAppService *service = [self helperService];
+        if (!service) {
+            return SNBSetError(error, 7, @"SMAppService is unavailable on this OS version.");
+        }
 
-    SNBLogInfo("Helper daemon status before registration: %ld", (long)status);
+        SMAppServiceStatus status = service.status;
+        SNBLogInfo("Helper daemon status before registration: %ld", (long)status);
+        if (status == SMAppServiceStatusEnabled) {
+            SNBLogInfo("Helper already enabled, skipping registration");
+            return YES;
+        }
 
-    if (status == SMAppServiceStatusEnabled) {
-        SNBLogInfo("Helper already enabled, skipping registration");
+        BOOL success = [service registerAndReturnError:error];
+        if (!success) {
+            SNBLogError("Helper registration failed: %s", error ? (*error).localizedDescription.UTF8String : "unknown error");
+            return NO;
+        }
+
+        SMAppServiceStatus newStatus = service.status;
+        SNBLogInfo("Helper daemon status after registration: %ld", (long)newStatus);
+        if (newStatus == SMAppServiceStatusNotFound || newStatus == SMAppServiceStatusNotRegistered) {
+            return SNBSetError(error, 1,
+                               @"Helper registration failed. Verify helper plist and bundle are embedded in the app.");
+        }
         return YES;
     }
 
-    SNBLogInfo("Registering helper via SMAppService...");
-    BOOL success = [service registerAndReturnError:error];
-
-    if (!success) {
-        SNBLogError("Helper registration failed: %s", error ? (*error).localizedDescription.UTF8String : "unknown error");
-        return NO;
-    }
-
-    // Check status after registration
-    SMAppServiceStatus newStatus = service.status;
-    SNBLogInfo("Helper daemon status after registration: %ld", (long)newStatus);
-
-    if (newStatus == SMAppServiceStatusNotFound || newStatus == SMAppServiceStatusNotRegistered) {
-        if (error && *error == nil) {
-            *error = [NSError errorWithDomain:@"SMAppServiceHelper"
-                                         code:1
-                                     userInfo:@{NSLocalizedDescriptionKey:
-                                                    @"Helper registration failed. Verify helper plist and bundle are embedded in the app."}];
-        }
-        return NO;
-    }
-
-    return YES;
+    return SNBSetError(error, 7, @"SMAppService is unavailable on this OS version.");
 }
 
 + (BOOL)uninstallHelperWithError:(NSError **)error {
-    SMAppService *service = [self helperService];
-    return [service unregisterAndReturnError:error];
+    if (@available(macOS 13.0, *)) {
+        SMAppService *service = [self helperService];
+        if (!service) {
+            return SNBSetError(error, 8, @"SMAppService is unavailable on this OS version.");
+        }
+        return [service unregisterAndReturnError:error];
+    }
+    return SNBSetError(error, 8, @"SMAppService is unavailable on this OS version.");
 }
 
 + (NSString *)helperStatus {
-    SMAppServiceStatus status = [self helperService].status;
-    switch (status) {
-        case SMAppServiceStatusNotRegistered:
-            return @"Not Registered";
-        case SMAppServiceStatusEnabled:
-            return @"Enabled";
-        case SMAppServiceStatusRequiresApproval:
-            return @"Requires Approval";
-        case SMAppServiceStatusNotFound:
-            return @"Not Found";
-        default:
-            return @"Unknown";
+    if (@available(macOS 13.0, *)) {
+        SMAppService *service = [self helperService];
+        if (!service) {
+            return @"Unsupported";
+        }
+        SMAppServiceStatus status = service.status;
+        switch (status) {
+            case SMAppServiceStatusNotRegistered:
+                return @"Not Registered";
+            case SMAppServiceStatusEnabled:
+                return @"Enabled";
+            case SMAppServiceStatusRequiresApproval:
+                return @"Requires Approval";
+            case SMAppServiceStatusNotFound:
+                return @"Not Found";
+            default:
+                return @"Unknown";
+        }
     }
+    return @"Unsupported";
+}
+
++ (NSString *)helperStatusForLegacyPlistPath:(NSString *)plistPath {
+    if (@available(macOS 13.0, *)) {
+        NSURL *plistURL = [NSURL fileURLWithPath:plistPath];
+        if (!plistURL) {
+            return @"Unknown";
+        }
+        SMAppServiceStatus status = [SMAppService statusForLegacyURL:plistURL];
+        switch (status) {
+            case SMAppServiceStatusNotRegistered: return @"Not Registered";
+            case SMAppServiceStatusEnabled: return @"Enabled";
+            case SMAppServiceStatusRequiresApproval: return @"Requires Approval";
+            case SMAppServiceStatusNotFound: return @"Not Found";
+            default: return @"Unknown";
+        }
+    }
+    return @"Unsupported";
 }
 
 @end
