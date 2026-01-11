@@ -38,6 +38,9 @@ extern NSString * const kGreyNoiseAPIKeyIdentifier;
 @property (nonatomic, readonly) NSTimeInterval reconnectDelay;
 @property (nonatomic, readonly) NSUInteger maxReconnectAttempts;
 
+// Packet Capture Configuration
+@property (nonatomic, readonly) NSTimeInterval packetPollingInterval;
+
 // Location Cache Configuration
 @property (nonatomic, readonly) NSUInteger maxLocationCacheSize;
 @property (nonatomic, readonly) NSTimeInterval locationCacheExpirationTime;
@@ -48,11 +51,16 @@ extern NSString * const kGreyNoiseAPIKeyIdentifier;
 @property (nonatomic, readonly) NSString *connectionLineColor;
 @property (nonatomic, readonly) NSInteger connectionLineWeight;
 @property (nonatomic, readonly) CGFloat connectionLineOpacity;
+@property (nonatomic, readonly) NSUInteger geoLocationSemaphoreLimit;
 
 // Threat Intelligence Configuration
 @property (nonatomic, readonly) NSUInteger threatIntelCacheSize;
 @property (nonatomic, readonly) NSTimeInterval threatIntelCacheTTL;
 @property (nonatomic, readonly) NSTimeInterval threatIntelPersistenceTTLHours;
+
+// Anomaly Detection Configuration
+@property (nonatomic, readonly) NSTimeInterval anomalyWindowSeconds;
+@property (nonatomic, readonly) NSTimeInterval anomalyRetrainInterval;
 
 // About Configuration
 @property (nonatomic, readonly) NSString *appVersion;

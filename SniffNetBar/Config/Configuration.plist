@@ -26,6 +26,20 @@
 	<key>MaxReconnectAttempts</key>
 	<integer>3</integer>
 
+	<!-- Packet Capture Configuration -->
+	<key>PacketPollingInterval</key>
+	<real>0.01</real>
+
+	<!-- Anomaly Detection Configuration -->
+	<key>AnomalyWindowSeconds</key>
+	<real>60.0</real>
+	<key>AnomalyRetrainInterval</key>
+	<real>21600.0</real>
+
+	<!-- Map Configuration -->
+	<key>GeoLocationSemaphoreLimit</key>
+	<integer>5</integer>
+
 	<!-- Location Cache Configuration -->
 	<key>MaxLocationCacheSize</key>
 	<integer>500</integer>

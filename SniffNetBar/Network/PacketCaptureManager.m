@@ -10,6 +10,7 @@
 #import "NetworkDevice.h"
 #import "SNBPrivilegedHelperClient.h"
 #import "Logger.h"
+#import "ConfigurationManager.h"
 
 @interface PacketCaptureManager ()
 @property (nonatomic, assign) BOOL isCapturing;
@@ -17,6 +18,7 @@
 @property (nonatomic, strong, readwrite) NSString *currentDeviceName;
 @property (nonatomic, strong) NSString *sessionID;
 @property (nonatomic, strong) NSTimer *pollingTimer;
+@property (nonatomic, strong) ConfigurationManager *configuration;
 @end
 
 @implementation PacketCaptureManager
@@ -26,6 +28,7 @@
     if (self) {
         _captureQueue = dispatch_queue_create("com.sniffnetbar.capture", DISPATCH_QUEUE_SERIAL);
         _isCapturing = NO;
+        _configuration = [ConfigurationManager sharedManager];
     }
     return self;
 }
@@ -137,11 +140,20 @@
 
 - (void)startPollingForPackets {
     [self.pollingTimer invalidate];
+    __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.pollingTimer = [NSTimer scheduledTimerWithTimeInterval:0.01
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        NSTimeInterval pollingInterval = strongSelf.configuration.packetPollingInterval;
+        strongSelf.pollingTimer = [NSTimer scheduledTimerWithTimeInterval:pollingInterval
                                                             repeats:YES
                                                               block:^(NSTimer *timer) {
-            [self pollNextPacket];
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (strongSelf) {
+                [strongSelf pollNextPacket];
+            }
         }];
     });
 }

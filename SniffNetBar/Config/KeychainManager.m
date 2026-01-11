@@ -19,6 +19,9 @@ static NSMutableDictionary<NSString *, NSString *> *s_cachedAPIKeys = nil;
 static BOOL s_cacheLoaded = NO;
 static BOOL s_keychainAccessEnabled = NO;
 
+// Class-level lock for synchronizing access to static variables
+static NSObject *s_lock = nil;
+
 // Error codes
 typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
     KeychainManagerErrorItemNotFound = 1001,
@@ -29,12 +32,18 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
 
 @implementation KeychainManager
 
++ (void)initialize {
+    if (self == [KeychainManager class]) {
+        s_lock = [[NSObject alloc] init];
+    }
+}
+
 #pragma mark - Cache Helpers
 
 + (NSMutableDictionary<NSString *, NSString *> *)loadAPIKeyCacheWithError:(NSError *_Nullable *_Nullable)error {
     // Don't actually load anything - let individual key accesses handle their own queries
     // This prevents multiple prompts
-    @synchronized(self) {
+    @synchronized(s_lock) {
         if (!s_cachedAPIKeys) {
             s_cachedAPIKeys = [[NSMutableDictionary alloc] init];
         }
@@ -44,7 +53,7 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
 }
 
 - (void)invalidateCache {
-    @synchronized([self class]) {
+    @synchronized(s_lock) {
         s_cachedAPIKeys = nil;
         s_cacheLoaded = NO;
     }
@@ -106,7 +115,7 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
     }
 
     // Update cache
-    @synchronized(self) {
+    @synchronized(s_lock) {
         if (!s_cachedAPIKeys) {
             s_cachedAPIKeys = [[NSMutableDictionary alloc] init];
         }
@@ -123,7 +132,7 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
     NSLog(@"[KEYCHAIN] getAPIKeyForIdentifier called for: %@", identifier);
 
     // Block keychain access until explicitly enabled (after root privileges obtained)
-    @synchronized(self) {
+    @synchronized(s_lock) {
         if (!s_keychainAccessEnabled) {
             NSLog(@"[KEYCHAIN] Access blocked - not yet enabled (waiting for root privileges)");
             return nil;
@@ -139,7 +148,7 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
     }
 
     // Check cache first
-    @synchronized(self) {
+    @synchronized(s_lock) {
         if (s_cacheLoaded && s_cachedAPIKeys && s_cachedAPIKeys[identifier]) {
             NSLog(@"[KEYCHAIN] Returning cached value for: %@", identifier);
             return s_cachedAPIKeys[identifier];
@@ -172,7 +181,7 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
     NSString *apiKey = [[NSString alloc] initWithData:passwordData encoding:NSUTF8StringEncoding];
 
     // Update cache
-    @synchronized(self) {
+    @synchronized(s_lock) {
         if (!s_cachedAPIKeys) {
             s_cachedAPIKeys = [[NSMutableDictionary alloc] init];
         }
@@ -244,7 +253,7 @@ typedef NS_ENUM(NSInteger, KeychainManagerErrorCode) {
     NSLog(@"[KEYCHAIN] Enabling keychain access");
 
     // Enable keychain access globally
-    @synchronized(self) {
+    @synchronized(s_lock) {
         s_keychainAccessEnabled = YES;
     }
 

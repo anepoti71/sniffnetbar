@@ -62,7 +62,8 @@
                                            configuration:_configuration];
         _menuBuilder.delegate = self;
         _threatIntelCoordinator = [[ThreatIntelCoordinator alloc] initWithConfiguration:_configuration];
-        _anomalyDetector = [[SNBAnomalyDetector alloc] initWithWindowSeconds:60.0];
+        NSTimeInterval anomalyWindowSeconds = _configuration.anomalyWindowSeconds;
+        _anomalyDetector = [[SNBAnomalyDetector alloc] initWithWindowSeconds:anomalyWindowSeconds];
         _anomalyExplainabilityCoordinator = [[SNBAnomalyExplainabilityCoordinator alloc]
                                              initWithConfiguration:_configuration
                                              threatIntelCoordinator:_threatIntelCoordinator];
@@ -380,7 +381,7 @@
 #pragma mark - Anomaly retraining
 
 - (void)scheduleAnomalyRetrain {
-    NSTimeInterval retrainInterval = 6.0 * 60.0 * 60.0;
+    NSTimeInterval retrainInterval = self.configuration.anomalyRetrainInterval;
     __weak typeof(self) weakSelf = self;
     self.anomalyRetrainTimer = [NSTimer timerWithTimeInterval:retrainInterval
                                                       repeats:YES

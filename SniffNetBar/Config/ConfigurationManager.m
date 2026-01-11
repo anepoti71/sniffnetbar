@@ -82,6 +82,7 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
         @"MenuFixedWidth": @420.0,
         @"ReconnectDelay": @5.0,
         @"MaxReconnectAttempts": @3,
+        @"PacketPollingInterval": @0.01,
         @"MaxLocationCacheSize": @500,
         @"LocationCacheExpirationTime": @7200.0,
         @"DefaultMapProvider": @"ipinfo.io",
@@ -89,6 +90,9 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
         @"ConnectionLineColor": @"#ff7a18",
         @"ConnectionLineWeight": @3,
         @"ConnectionLineOpacity": @0.9,
+        @"GeoLocationSemaphoreLimit": @5,
+        @"AnomalyWindowSeconds": @60.0,
+        @"AnomalyRetrainInterval": @21600.0,
         @"ExplainabilityEnabled": @YES,
         @"ExplainabilityOllamaBaseURL": @"http://127.0.0.1:11434",
         @"ExplainabilityOllamaModel": @"llama3.1",
@@ -263,6 +267,13 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
     return value ? [value unsignedIntegerValue] : 3;
 }
 
+#pragma mark - Packet Capture Configuration
+
+- (NSTimeInterval)packetPollingInterval {
+    NSNumber *value = self.configuration[@"PacketPollingInterval"];
+    return value ? [value doubleValue] : 0.01;
+}
+
 #pragma mark - Location Cache Configuration
 
 - (NSUInteger)maxLocationCacheSize {
@@ -302,6 +313,11 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
     return value ? [value doubleValue] : 0.9;
 }
 
+- (NSUInteger)geoLocationSemaphoreLimit {
+    NSNumber *value = self.configuration[@"GeoLocationSemaphoreLimit"];
+    return value ? [value unsignedIntegerValue] : 5;
+}
+
 #pragma mark - Threat Intelligence Configuration
 
 - (NSUInteger)threatIntelCacheSize {
@@ -317,6 +333,18 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
 - (NSTimeInterval)threatIntelPersistenceTTLHours {
     NSNumber *value = self.configuration[@"ThreatIntelPersistenceTTLHours"];
     return value ? [value doubleValue] : 24.0;
+}
+
+#pragma mark - Anomaly Detection Configuration
+
+- (NSTimeInterval)anomalyWindowSeconds {
+    NSNumber *value = self.configuration[@"AnomalyWindowSeconds"];
+    return value ? [value doubleValue] : 60.0;
+}
+
+- (NSTimeInterval)anomalyRetrainInterval {
+    NSNumber *value = self.configuration[@"AnomalyRetrainInterval"];
+    return value ? [value doubleValue] : 21600.0;
 }
 
 #pragma mark - About Configuration

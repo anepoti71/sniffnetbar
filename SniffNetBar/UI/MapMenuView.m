@@ -70,7 +70,8 @@
         sessionConfig.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
         _session = [NSURLSession sessionWithConfiguration:sessionConfig];
         _renderQueue = dispatch_queue_create("com.sniffnetbar.map.render", DISPATCH_QUEUE_SERIAL);
-        _geoLocationSemaphore = dispatch_semaphore_create(5); // Limit to 5 concurrent geolocation requests
+        NSUInteger semaphoreLimit = [ConfigurationManager sharedManager].geoLocationSemaphoreLimit;
+        _geoLocationSemaphore = dispatch_semaphore_create((long)semaphoreLimit);
 
         NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProvider];
         NSString *defaultProvider = [ConfigurationManager sharedManager].defaultMapProvider;
