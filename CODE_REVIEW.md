@@ -2,9 +2,17 @@
 
 ## Executive Summary
 
-This is a well-structured macOS network monitoring application with good architectural separation. The codebase demonstrates solid Objective-C practices, proper use of ARC, and thoughtful organization. However, there are several areas that need attention, particularly around security, thread safety, and code quality improvements.
+This is a well-structured macOS network monitoring application with good architectural separation. The codebase demonstrates solid Objective-C practices, proper use of ARC, and thoughtful organization. 
 
-**Overall Assessment**: ✅ **Good** - Solid foundation with room for improvement
+**Significant improvements have been made** since the initial review, with critical memory management and thread safety issues resolved, and magic numbers extracted to configuration.
+
+**Overall Assessment**: ✅ **Very Good** - Solid foundation with most critical issues resolved
+
+### Recent Improvements (Since Initial Review)
+- ✅ Fixed retain cycle in PacketCaptureManager (memory leak prevention)
+- ✅ Fixed KeychainManager thread safety issue (class-level lock)
+- ✅ Extracted magic numbers to Configuration.plist (maintainability)
+- ✅ Analyzed security entitlements (see ENTITLEMENT_ANALYSIS.md)
 
 ---
 
@@ -44,15 +52,32 @@ NSLog(@"[KEYCHAIN] getAPIKeyForIdentifier called for: %@", identifier);
 - Use the existing `SNBLogConfig*` macros instead
 - The helper service (`SNBPrivilegedHelperService.m`) also has `NSLog` statements that should be replaced
 
-#### 2.2 Hard-coded Values
+#### 2.2 Hard-coded Values ✅ **FIXED**
 **Locations**: Multiple files
 
-**Issues**:
-- Magic numbers throughout the code (e.g., polling interval `0.01` in `PacketCaptureManager.m:141`)
-- Retrain interval hard-coded as `6.0 * 60.0 * 60.0` in `AppCoordinator.m:383`
-- Semaphore limits hard-coded (e.g., `dispatch_semaphore_create(5)` in `MapMenuView.m`)
+**Status**: ✅ **RESOLVED**
 
-**Recommendation**: Extract constants to header files or configuration
+**Fix Applied**: Magic numbers have been extracted to `Configuration.plist`:
+
+1. **PacketPollingInterval** (`0.01`) - Now configurable via `configuration.packetPollingInterval`
+   - Used in: `PacketCaptureManager.m`
+
+2. **AnomalyRetrainInterval** (`21600.0` = 6 hours) - Now configurable via `configuration.anomalyRetrainInterval`
+   - Used in: `AppCoordinator.m`
+
+3. **AnomalyWindowSeconds** (`60.0`) - Now configurable via `configuration.anomalyWindowSeconds`
+   - Used in: `AppCoordinator.m`
+
+4. **GeoLocationSemaphoreLimit** (`5`) - Now configurable via `configuration.geoLocationSemaphoreLimit`
+   - Used in: `MapMenuView.m`
+
+All values are now:
+- Defined in `Configuration.plist`
+- Exposed as properties in `ConfigurationManager.h`
+- Implemented with getters in `ConfigurationManager.m`
+- Used via the configuration manager throughout the codebase
+
+This makes the application more maintainable and allows runtime configuration without code changes.
 
 ---
 
@@ -65,31 +90,32 @@ NSLog(@"[KEYCHAIN] getAPIKeyForIdentifier called for: %@", identifier);
 
 ### Potential Issues
 
-#### 3.1 Retain Cycle Risk in PacketCaptureManager
-**Location**: `PacketCaptureManager.m:141-145`
+#### 3.1 Retain Cycle Risk in PacketCaptureManager ✅ **FIXED**
+**Location**: `PacketCaptureManager.m:146-153`
 
-```objc
-self.pollingTimer = [NSTimer scheduledTimerWithTimeInterval:0.01
-                                                    repeats:YES
-                                                      block:^(NSTimer *timer) {
-    [self pollNextPacket];  // Strong reference to self
-}];
-```
+**Status**: ✅ **RESOLVED**
 
-**Issue**: The timer block captures `self` strongly, creating a retain cycle. The timer keeps `self` alive, and `self` keeps the timer alive.
-
-**Recommendation**: Use a weak reference:
+**Fix Applied**: The timer block now uses weak references to break the retain cycle:
 ```objc
 __weak typeof(self) weakSelf = self;
-self.pollingTimer = [NSTimer scheduledTimerWithTimeInterval:0.01
-                                                    repeats:YES
-                                                      block:^(NSTimer *timer) {
+dispatch_async(dispatch_get_main_queue(), ^{
     __strong typeof(weakSelf) strongSelf = weakSelf;
-    if (strongSelf) {
-        [strongSelf pollNextPacket];
+    if (!strongSelf) {
+        return;
     }
-}];
+    NSTimeInterval pollingInterval = strongSelf.configuration.packetPollingInterval;
+    strongSelf.pollingTimer = [NSTimer scheduledTimerWithTimeInterval:pollingInterval
+                                                            repeats:YES
+                                                              block:^(NSTimer *timer) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf) {
+            [strongSelf pollNextPacket];
+        }
+    }];
+});
 ```
+
+The fix also extracts the polling interval to configuration (see section 2.2).
 
 #### 3.2 Block-based Callbacks
 **Location**: `PacketCaptureManager.m:166-169`
@@ -107,34 +133,35 @@ The `onPacketReceived` callback is dispatched to `captureQueue` but doesn't chec
 
 ### Issues
 
-#### 4.1 Race Condition in KeychainManager
-**Location**: `KeychainManager.m:142-147`
+#### 4.1 Race Condition in KeychainManager ✅ **FIXED**
+**Location**: `KeychainManager.m` (multiple locations)
+
+**Status**: ✅ **RESOLVED**
+
+**Fix Applied**: A class-level lock object has been added and all static variable access now uses proper synchronization:
 
 ```objc
-@synchronized(self) {
-    if (s_cacheLoaded && s_cachedAPIKeys && s_cachedAPIKeys[identifier]) {
-        NSLog(@"[KEYCHAIN] Returning cached value for: %@", identifier);
-        return s_cachedAPIKeys[identifier];
-    }
-}
-```
-
-**Issue**: The synchronized block uses `self` but accesses class-level static variables (`s_cacheLoaded`, `s_cachedAPIKeys`). This synchronization is ineffective for class-level state.
-
-**Recommendation**: Use a class-level lock object:
-```objc
+// Class-level lock for synchronizing access to static variables
 static NSObject *s_lock = nil;
+
 + (void)initialize {
     if (self == [KeychainManager class]) {
         s_lock = [[NSObject alloc] init];
     }
 }
 
-// Then use:
+// All static variable access now uses:
 @synchronized(s_lock) {
-    // access s_cachedAPIKeys
+    // access s_cachedAPIKeys, s_cacheLoaded, s_keychainAccessEnabled
 }
 ```
+
+All 7 instances of `@synchronized(self)` that accessed static variables have been replaced with `@synchronized(s_lock)`:
+- `loadAPIKeyCacheWithError:`
+- `invalidateCache`
+- `saveAPIKey:forIdentifier:error:` (cache update)
+- `getAPIKeyForIdentifier:error:` (3 locations: access check, cache check, cache update)
+- `requestKeychainAccessWithError:`
 
 #### 4.2 Dictionary Access in TrafficStatistics
 **Location**: `TrafficStatistics.m:515-521`
@@ -149,7 +176,7 @@ The `dnsLookupLocks` dictionary is accessed with `@synchronized(self.dnsLookupLo
 
 ### Critical Security Concerns
 
-#### 5.1 Entitlements Configuration
+#### 5.1 Entitlements Configuration ⚠️ **ANALYZED**
 **Location**: `SniffNetBar.entitlements`, `SniffNetBarHelper.entitlements`
 
 ```xml
@@ -159,14 +186,23 @@ The `dnsLookupLocks` dictionary is accessed with `@synchronized(self.dnsLookupLo
 <true/>
 ```
 
-**Issue**: These entitlements significantly reduce security:
-- `allow-unsigned-executable-memory`: Allows code execution from memory regions that aren't signed (potential ROP/JOP attack vector)
-- `disable-library-validation`: Allows loading unsigned libraries (potential code injection)
+**Status**: ⚠️ **ANALYSIS COMPLETE** - See `ENTITLEMENT_ANALYSIS.md` for detailed analysis
+
+**Analysis Findings**:
+- `allow-unsigned-executable-memory`: **Likely NOT needed**
+  - WKWebView handles JIT compilation internally in a separate process
+  - CoreML models are pre-compiled and don't require JIT
+  - No custom dynamic code generation found in the codebase
+  - **Recommendation**: Remove and test (see ENTITLEMENT_ANALYSIS.md)
+
+- `disable-library-validation`: Required for loading the privileged helper
+  - Needed for XPC communication with the helper service
+  - Documented in comments as necessary for helper functionality
 
 **Recommendation**: 
-- Document why these entitlements are necessary
-- Consider if they can be removed or more narrowly scoped
-- Add security review notes explaining the trade-offs
+- ✅ **Remove `allow-unsigned-executable-memory`** and verify functionality
+- ✅ Keep `disable-library-validation` (required for helper)
+- ✅ Document security trade-offs (completed in ENTITLEMENT_ANALYSIS.md)
 
 #### 5.2 Keychain Access Control
 **Location**: `KeychainManager.m:80`
@@ -294,22 +330,35 @@ dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
 
 ## Priority Recommendations
 
+### ✅ Completed Fixes
+1. ✅ **Fix retain cycle in PacketCaptureManager** - Retain cycle resolved using weak references
+2. ✅ **Fix KeychainManager synchronization** - Thread safety issue resolved with class-level lock
+3. ✅ **Extract constants** - Magic numbers extracted to Configuration.plist (PacketPollingInterval, AnomalyRetrainInterval, AnomalyWindowSeconds, GeoLocationSemaphoreLimit)
+4. ✅ **Review entitlements** - Analysis completed (see ENTITLEMENT_ANALYSIS.md)
+
 ### 🔴 Critical (Security & Stability)
 1. **Remove/guard NSLog statements** - Security risk, information leakage
-2. **Fix retain cycle in PacketCaptureManager** - Potential memory leak
-3. **Review entitlements** - Document security trade-offs
-4. **Fix KeychainManager synchronization** - Thread safety issue
+   - Locations: `KeychainManager.m:123,128,144,244`, `SNBPrivilegedHelperService.m` (multiple)
+   - Replace with `SNBLogConfig*` macros or wrap in `#ifdef DEBUG`
+
+2. **Test entitlement removal** - Remove `allow-unsigned-executable-memory` and verify functionality
+   - See `ENTITLEMENT_ANALYSIS.md` for detailed analysis
+   - Likely safe to remove as WKWebView handles JIT internally
 
 ### 🟡 High Priority (Code Quality)
-5. **Extract constants** - Remove magic numbers
-6. **Add error logging** - Improve debuggability
-7. **Add API documentation** - Improve maintainability
-8. **Consider timer optimization** - Reduce CPU usage
+3. **Add error logging** - Improve debuggability
+   - Locations: `AppCoordinator.m:149-157` (capture failures), async error handling
+4. **Add API documentation** - Improve maintainability
+   - Add Javadoc-style comments for public APIs
+5. **Consider timer optimization** - Reduce CPU usage
+   - Current 100 Hz polling may be excessive (now configurable via PacketPollingInterval)
 
 ### 🟢 Medium Priority (Polish)
-9. **Split large files** - Improve maintainability
-10. **Add more tests** - Improve reliability
-11. **Create architecture docs** - Help onboarding
+6. **Split large files** - Improve maintainability
+   - `MenuBuilder.m` (1478 lines) could be split into focused components
+7. **Add more tests** - Improve reliability
+   - Unit tests for keychain operations, statistics processing
+8. **Create architecture docs** - Help onboarding
 
 ---
 
@@ -326,20 +375,36 @@ dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
 
 ## Conclusion
 
-This is a well-architected codebase with solid fundamentals. The main concerns are:
-- Security (entitlements, logging)
-- Some thread safety issues
-- Code quality improvements (documentation, constants)
+This is a well-architected codebase with solid fundamentals. **Significant improvements have been made** since the initial review:
 
-With the critical issues addressed, this would be a production-ready codebase. The architecture is sound and the code quality is generally good.
+### ✅ Issues Resolved:
+1. **Memory Management**: Retain cycle in PacketCaptureManager fixed
+2. **Thread Safety**: KeychainManager synchronization issue resolved
+3. **Code Quality**: Magic numbers extracted to Configuration.plist
+4. **Security Analysis**: Entitlements analyzed (see ENTITLEMENT_ANALYSIS.md)
 
-**Recommended Action Plan**:
-1. Address critical security and memory issues first
-2. Extract constants and improve error handling
-3. Add documentation and tests
-4. Consider refactoring large files
+### ⚠️ Remaining Concerns:
+- Security: Debug logging (NSLog statements) still present
+- Documentation: API documentation could be improved
+- Testing: Could benefit from additional test coverage
+
+### 📊 Current Status:
+- **Architecture**: ✅ Excellent - Clean separation of concerns
+- **Memory Management**: ✅ Good - Retain cycles fixed
+- **Thread Safety**: ✅ Good - Synchronization issues resolved
+- **Code Quality**: ✅ Improved - Constants extracted, still room for documentation
+- **Security**: ⚠️ Good - Entitlements analyzed, logging needs attention
+
+The codebase is in **much better shape** after the fixes. With the remaining logging issues addressed, this would be a production-ready codebase.
+
+**Recommended Next Steps**:
+1. Remove/guard NSLog statements in KeychainManager and helper service
+2. Test removal of `allow-unsigned-executable-memory` entitlement (see ENTITLEMENT_ANALYSIS.md)
+3. Add API documentation for public methods
+4. Consider adding more comprehensive tests
 
 ---
 
 *Review conducted: [Date]*
+*Last updated: After implementation of fixes*
 *Reviewer: AI Code Review Assistant*
