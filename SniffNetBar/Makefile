@@ -100,6 +100,7 @@ $(APP_BUNDLE): $(MACOS_DIR)/$(APP_NAME) $(HELPER_BINARY) $(BUILD_DIR)/unregister
 	@cp Scripts/anomaly_score.py $(RESOURCES_DIR)/anomaly_score.py
 	@cp Scripts/anomaly_train.py $(RESOURCES_DIR)/anomaly_train.py
 	@cp Scripts/convert_iforest_to_coreml.py $(RESOURCES_DIR)/convert_iforest_to_coreml.py
+	@cp Resources/traffic_report_template.html $(RESOURCES_DIR)/traffic_report_template.html
 	@if [ -d ../resources/anomaly_model.mlmodelc ]; then cp -R ../resources/anomaly_model.mlmodelc $(RESOURCES_DIR)/anomaly_model.mlmodelc; fi
 	@cp $(BUILD_DIR)/unregister_helper $(MACOS_DIR)/unregister_helper
 	@mkdir -p $(APP_LAUNCHDAEMONS_DIR)
@@ -158,7 +159,7 @@ $(RESOURCES_DIR):
 	mkdir -p $(RESOURCES_DIR)
 
 # Command-line tools for API key management and testing
-tools: $(BUILD_DIR)/set_apikey $(BUILD_DIR)/remove_apikey $(BUILD_DIR)/list_apikeys $(BUILD_DIR)/unregister_helper
+tools: $(BUILD_DIR)/set_apikey $(BUILD_DIR)/remove_apikey $(BUILD_DIR)/list_apikeys $(BUILD_DIR)/list_apikey $(BUILD_DIR)/unregister_helper
 
 # Test utilities
 test-threat-intel: $(BUILD_DIR)/test_threat_intel
@@ -200,6 +201,10 @@ $(BUILD_DIR)/list_apikeys: Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainMa
 	@echo "Building list_apikeys tool..."
 	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Scripts/list_apikeys.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o -o $(BUILD_DIR)/list_apikeys $(FRAMEWORKS)
 
+$(BUILD_DIR)/list_apikey: $(BUILD_DIR)/list_apikeys | $(BUILD_DIR)
+	@echo "Creating list_apikey tool alias..."
+	@cp $(BUILD_DIR)/list_apikeys $(BUILD_DIR)/list_apikey
+
 $(BUILD_DIR)/unregister_helper: Tools/unregister_helper.m $(BUILD_DIR)/Utils/SMAppServiceHelper.o $(BUILD_DIR)/Utils/Logger.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Config/KeychainManager.o | $(BUILD_DIR)
 	@echo "Building unregister_helper tool..."
 	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Tools/unregister_helper.m \
@@ -224,10 +229,10 @@ dmg: $(APP_BUNDLE)
 	@echo "Creating DMG installer..."
 	@./Scripts/create_dmg.sh
 
-run: $(if $(CLEAN),clean,) $(APP_BUNDLE)
+run: $(if $(CLEAN),clean,) $(APP_BUNDLE) tools
 	@echo "Running $(APP_NAME)..."
 	@pkill -x $(APP_NAME) >/dev/null 2>&1 || true
-	open $(APP_BUNDLE)
+	@open -n $(APP_BUNDLE) || $(MACOS_DIR)/$(APP_NAME)
 
 # Test targets
 TEST_BUNDLE = $(BUILD_DIR)/Tests.xctest

@@ -595,31 +595,34 @@ static NSString * const kMaliciousKeyScore = @"score";
 
 #pragma mark - Report
 
+- (NSString *)reportTemplateHTML {
+    NSString *path = [[NSBundle mainBundle] pathForResource:@"traffic_report_template" ofType:@"html"];
+    if (!path) {
+        SNBLogWarn("Report template not found in bundle resources");
+        return nil;
+    }
+
+    NSError *error = nil;
+    NSString *templateHTML = [NSString stringWithContentsOfFile:path
+                                                       encoding:NSUTF8StringEncoding
+                                                          error:&error];
+    if (error || templateHTML.length == 0) {
+        SNBLogWarn("Failed to read report template: %{public}@",
+                   error.localizedDescription ?: @"empty template");
+        return nil;
+    }
+    return templateHTML;
+}
+
 - (void)generateReportLocked {
     [self refreshCurrentDaySnapshot];
     [self persistToDatabase];
-    NSMutableString *html = [NSMutableString string];
-    [html appendString:@"<!DOCTYPE html>\n"];
-    [html appendString:@"<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"];
-    [html appendString:@"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"];
-    [html appendString:@"<title>SniffNetBar Statistics</title>\n"];
-    [html appendString:@"<style>\n"];
-    [html appendString:@"body{font-family:Menlo,Monaco,Consolas,\"Courier New\",monospace;background:#f4f1ea;color:#1c1c1c;margin:0;padding:24px;}\n"];
-    [html appendString:@"h1,h2{margin:0 0 12px 0;}\n"];
-    [html appendString:@".card{background:#fff;border:1px solid #d9d2c3;border-radius:8px;padding:16px;margin-bottom:20px;box-shadow:0 2px 6px rgba(0,0,0,0.04);}"];
-    [html appendString:@"table{width:100%;border-collapse:collapse;font-size:14px;}\n"];
-    [html appendString:@"th,td{padding:8px 6px;border-bottom:1px solid #e6e0d4;text-align:left;vertical-align:top;}\n"];
-    [html appendString:@"th{background:#f0e9db;font-weight:600;}\n"];
-    [html appendString:@".muted{color:#6b6b6b;font-size:12px;}\n"];
-    [html appendString:@"ul{padding-left:18px;margin:6px 0;}\n"];
-    [html appendString:@".controls{display:flex;flex-wrap:wrap;gap:12px;margin:10px 0 16px 0;font-size:12px;}\n"];
-    [html appendString:@".controls label{display:flex;align-items:center;gap:6px;}\n"];
-    [html appendString:@"details{margin:12px 0;border:1px solid #eee3cf;border-radius:8px;padding:10px;background:#fffaf1;}\n"];
-    [html appendString:@"summary{cursor:pointer;font-weight:600;}\n"];
-    [html appendString:@".section-title{margin:16px 0 8px 0;}\n"];
-    [html appendString:@"</style>\n</head>\n<body>\n"];
-    [html appendFormat:@"<h1>SniffNetBar Statistics</h1>\n<p class=\"muted\">Generated %@</p>\n",
-     [self formattedDateTime:[NSDate date]]];
+    NSString *templateHTML = [self reportTemplateHTML];
+    if (templateHTML.length == 0) {
+        return;
+    }
+
+    NSString *generatedAt = [self formattedDateTime:[NSDate date]];
 
     NSArray<NSDictionary *> *records = [self dailyRecordsFromDatabase];
     NSDictionary *weekly = [self weeklySummaryFromRecords:records];
@@ -641,76 +644,45 @@ static NSString * const kMaliciousKeyScore = @"score";
         }
     }
 
-    [html appendString:@"<div class=\"card\">\n<h2>Weekly Summary</h2>\n"];
+    NSMutableString *weeklySection = [NSMutableString string];
+    [weeklySection appendString:@"<details class=\"card\" open>\n"];
+    [weeklySection appendString:@"<summary><span>Weekly Overview</span></summary>\n"];
+    [weeklySection appendString:@"<div class=\"section-body\">\n"];
+    if (weekly.count > 0) {
+        [weeklySection appendFormat:@"<p class=\"sub\">Range %@</p>\n", weekly[@"range"] ?: @"-"];
+    }
     if (weekly.count == 0) {
-        [html appendString:@"<p class=\"muted\">No weekly data available yet.</p>\n"];
+        [weeklySection appendString:@"<p class=\"empty\">No weekly data available yet.</p>\n"];
     } else {
-        [html appendString:@"<table>\n"];
-        [html appendString:@"<tr><th>Range</th><th>Total Bytes</th><th>Avg Rate</th><th>Max Rate</th><th>Max Hosts</th><th>Max Connections/s</th><th>Most Active Day</th></tr>\n"];
-        [html appendFormat:@"<tr><td>%@</td><td>%@</td><td>%@</td><td>%@</td><td>%@</td><td>%@</td><td>%@</td></tr>\n",
-         weekly[@"range"],
-         weekly[@"totalBytes"],
-         weekly[@"avgRate"],
-         weekly[@"maxRate"],
-         weekly[@"maxHosts"],
-         weekly[@"maxConnections"],
-         weekly[@"mostActiveDay"]];
-        [html appendString:@"</table>\n"];
+        [weeklySection appendString:@"<div class=\"kpi-grid\">\n"];
+        [weeklySection appendFormat:@"<div class=\"kpi\"><div class=\"kpi-label\">Total bytes</div><div class=\"kpi-value\">%@</div></div>\n",
+         weekly[@"totalBytes"] ?: @"-"];
+        [weeklySection appendFormat:@"<div class=\"kpi\"><div class=\"kpi-label\">Avg rate</div><div class=\"kpi-value\">%@</div></div>\n",
+         weekly[@"avgRate"] ?: @"-"];
+        [weeklySection appendFormat:@"<div class=\"kpi\"><div class=\"kpi-label\">Max rate</div><div class=\"kpi-value\">%@</div></div>\n",
+         weekly[@"maxRate"] ?: @"-"];
+        [weeklySection appendFormat:@"<div class=\"kpi\"><div class=\"kpi-label\">Peak hosts</div><div class=\"kpi-value\">%@</div></div>\n",
+         weekly[@"maxHosts"] ?: @"-"];
+        [weeklySection appendFormat:@"<div class=\"kpi\"><div class=\"kpi-label\">Peak connections/s</div><div class=\"kpi-value\">%@</div></div>\n",
+         weekly[@"maxConnections"] ?: @"-"];
+        [weeklySection appendFormat:@"<div class=\"kpi\"><div class=\"kpi-label\">Most active day</div><div class=\"kpi-value\">%@</div></div>\n",
+         weekly[@"mostActiveDay"] ?: @"-"];
+        [weeklySection appendString:@"</div>\n"];
     }
-    [html appendString:@"</div>\n"];
+    [weeklySection appendString:@"</div>\n"];
+    [weeklySection appendString:@"</details>\n"];
 
-    [html appendString:@"<div class=\"card\">\n<h2>Daily Statistics</h2>\n"];
-    if (records.count == 0) {
-        [html appendString:@"<p class=\"muted\">No daily data available yet.</p>\n"];
-    } else {
-        [html appendString:@"<div class=\"controls\">\n"];
-        [html appendString:@"<label>Sort daily by\n"];
-        [html appendString:@"<select id=\"dailySort\">\n"];
-        [html appendString:@"<option value=\"date_desc\" selected>Date (newest)</option>\n"];
-        [html appendString:@"<option value=\"date_asc\">Date (oldest)</option>\n"];
-        [html appendString:@"<option value=\"hosts_desc\">Hosts</option>\n"];
-        [html appendString:@"<option value=\"connections_desc\">Connections/s</option>\n"];
-        [html appendString:@"<option value=\"rate_desc\">Avg rate</option>\n"];
-        [html appendString:@"</select></label>\n"];
-        [html appendString:@"</div>\n"];
-
-        [html appendString:@"<table id=\"dailyTable\">\n"];
-        [html appendString:@"<thead><tr><th>Date</th><th>Avg Rate</th><th>Max Rate</th><th>Hosts</th><th>Max Connections/s</th><th>Malicious</th><th>Total Bytes</th></tr></thead>\n"];
-        [html appendString:@"<tbody>\n"];
-        for (NSDictionary *record in records) {
-            NSString *date = record[kStatsKeyDate] ?: @"";
-            uint64_t totalBytes = [record[kStatsKeyTotalBytes] unsignedLongLongValue];
-            uint64_t maxRate = [record[kStatsKeyMaxRate] unsignedLongLongValue];
-            NSUInteger maxConnections = [record[kStatsKeyMaxConnections] unsignedIntegerValue];
-            NSUInteger hostCount = [record[kStatsKeyUniqueHosts] unsignedIntegerValue];
-            NSTimeInterval activeSeconds = [self activeSecondsForRecord:record];
-            uint64_t avgRate = activeSeconds > 0 ? (uint64_t)(totalBytes / activeSeconds) : 0;
-            NSUInteger maliciousCount = maliciousByDay[date].count;
-
-            [html appendFormat:@"<tr data-date=\"%@\" data-hosts=\"%lu\" data-connections=\"%lu\" data-rate=\"%llu\">"
-             "<td>%@</td><td>%@</td><td>%@</td><td>%lu</td><td>%lu</td><td>%lu</td><td>%@</td></tr>\n",
-             date,
-             (unsigned long)hostCount,
-             (unsigned long)maxConnections,
-             (unsigned long long)avgRate,
-             date,
-             [self formattedRate:avgRate],
-             [self formattedRate:maxRate],
-             (unsigned long)hostCount,
-             (unsigned long)maxConnections,
-             (unsigned long)maliciousCount,
-             [SNBByteFormatter stringFromBytes:totalBytes]];
-        }
-        [html appendString:@"</tbody></table>\n"];
-    }
-    [html appendString:@"</div>\n"];
-
-    [html appendString:@"<div class=\"card\">\n<h2>Malicious Connections</h2>\n"];
+    NSMutableString *maliciousSection = [NSMutableString string];
+    [maliciousSection appendString:@"<details class=\"card\">\n"];
+    [maliciousSection appendString:@"<summary><span>Malicious Connections</span></summary>\n"];
+    [maliciousSection appendString:@"<div class=\"section-body\">\n"];
     if (allMalicious.count == 0) {
-        [html appendString:@"<p class=\"muted\">No malicious connections detected.</p>\n"];
+        [maliciousSection appendString:@"<p class=\"empty\">No malicious connections detected.</p>\n"];
     } else {
-        [html appendString:@"<table>\n"];
-        [html appendString:@"<tr><th>Date</th><th>Indicator</th><th>Connection</th><th>Score</th><th>Verdict</th><th>Confidence</th><th>Bytes</th><th>Packets</th><th>Providers</th><th>Explanation</th></tr>\n"];
+        [maliciousSection appendString:@"<div class=\"table-wrap\">\n"];
+        [maliciousSection appendString:@"<table>\n"];
+        [maliciousSection appendString:@"<thead><tr><th>Date</th><th>Indicator</th><th>Connection</th><th>Score</th><th>Verdict</th><th>Confidence</th><th>Bytes</th><th>Packets</th><th>Providers</th><th>Explanation</th></tr></thead>\n"];
+        [maliciousSection appendString:@"<tbody>\n"];
         for (NSDictionary *entry in allMalicious) {
             NSString *date = entry[kStatsKeyDate] ?: @"";
             NSString *indicator = entry[kMaliciousKeyIndicator] ?: @"";
@@ -730,27 +702,88 @@ static NSString * const kMaliciousKeyScore = @"score";
             NSString *connectionLabel = [NSString stringWithFormat:@"%@:%ld -> %@:%ld",
                                          source, (long)sourcePort.integerValue,
                                          destination, (long)destinationPort.integerValue];
-            [html appendFormat:@"<tr><td>%@</td><td>%@</td><td>%@</td><td>%ld</td><td>%@</td><td>%@</td>"
-             "<td>%@</td><td>%llu</td><td>%@</td><td>%@</td></tr>\n",
+            NSString *scoreClass = @"pill";
+            if (score >= 80) {
+                scoreClass = @"pill pill--danger";
+            } else if (score >= 50) {
+                scoreClass = @"pill pill--warn";
+            }
+            NSString *verdictBadge = verdict.length > 0
+                ? [NSString stringWithFormat:@"<span class=\"%@\">%@</span>", scoreClass, verdict]
+                : @"<span class=\"pill\">-</span>";
+            [maliciousSection appendFormat:@"<tr><td>%@</td><td>%@</td><td>%@</td><td>%ld</td><td>%@</td><td>%@</td>"
+             "<td>%@</td><td>%llu</td><td>%@</td><td class=\"col-explain\">%@</td></tr>\n",
              date,
              indicator,
              connectionLabel,
              (long)score,
-             verdict,
+             verdictBadge,
              confidence,
              [SNBByteFormatter stringFromBytes:bytes],
              (unsigned long long)packets,
              providersHtml,
              explanation];
         }
-        [html appendString:@"</table>\n"];
+        [maliciousSection appendString:@"</tbody></table>\n"];
+        [maliciousSection appendString:@"</div>\n"];
     }
-    [html appendString:@"</div>\n"];
+    [maliciousSection appendString:@"</div>\n"];
+    [maliciousSection appendString:@"</details>\n"];
 
-    [html appendString:@"<div class=\"card\">\n<h2>Daily Details</h2>\n"];
+    NSMutableString *dailySection = [NSMutableString string];
+    [dailySection appendString:@"<details class=\"card\" open>\n"];
+    [dailySection appendString:@"<summary><span>Daily Statistics &amp; Details</span></summary>\n"];
+    [dailySection appendString:@"<div class=\"section-body\">\n"];
     if (records.count == 0) {
-        [html appendString:@"<p class=\"muted\">No daily details available yet.</p>\n"];
+        [dailySection appendString:@"<p class=\"empty\">No daily data available yet.</p>\n"];
     } else {
+        [dailySection appendString:@"<div class=\"controls\">\n"];
+        [dailySection appendString:@"<label>Sort daily by\n"];
+        [dailySection appendString:@"<select id=\"dailySort\">\n"];
+        [dailySection appendString:@"<option value=\"date_desc\" selected>Date (newest)</option>\n"];
+        [dailySection appendString:@"<option value=\"date_asc\">Date (oldest)</option>\n"];
+        [dailySection appendString:@"<option value=\"hosts_desc\">Hosts</option>\n"];
+        [dailySection appendString:@"<option value=\"connections_desc\">Connections/s</option>\n"];
+        [dailySection appendString:@"<option value=\"rate_desc\">Avg rate</option>\n"];
+        [dailySection appendString:@"<option value=\"malicious_desc\">Malicious</option>\n"];
+        [dailySection appendString:@"</select></label>\n"];
+        [dailySection appendString:@"</div>\n"];
+
+        [dailySection appendString:@"<div class=\"table-wrap\">\n"];
+        [dailySection appendString:@"<table id=\"dailyTable\">\n"];
+        [dailySection appendString:@"<thead><tr><th>Date</th><th>Avg Rate</th><th>Max Rate</th><th>Hosts</th><th>Max Connections/s</th><th>Malicious</th><th>Total Bytes</th></tr></thead>\n"];
+        [dailySection appendString:@"<tbody>\n"];
+        for (NSDictionary *record in records) {
+            NSString *date = record[kStatsKeyDate] ?: @"";
+            uint64_t totalBytes = [record[kStatsKeyTotalBytes] unsignedLongLongValue];
+            uint64_t maxRate = [record[kStatsKeyMaxRate] unsignedLongLongValue];
+            NSUInteger maxConnections = [record[kStatsKeyMaxConnections] unsignedIntegerValue];
+            NSUInteger hostCount = [record[kStatsKeyUniqueHosts] unsignedIntegerValue];
+            NSTimeInterval activeSeconds = [self activeSecondsForRecord:record];
+            uint64_t avgRate = activeSeconds > 0 ? (uint64_t)(totalBytes / activeSeconds) : 0;
+            NSUInteger maliciousCount = maliciousByDay[date].count;
+            NSString *maliciousBadge = maliciousCount > 0
+                ? [NSString stringWithFormat:@"<span class=\"badge badge--danger\">%lu</span>", (unsigned long)maliciousCount]
+                : @"<span class=\"badge badge--neutral\">0</span>";
+
+            [dailySection appendFormat:@"<tr data-date=\"%@\" data-hosts=\"%lu\" data-connections=\"%lu\" data-rate=\"%llu\" data-malicious=\"%lu\">"
+             "<td>%@</td><td>%@</td><td>%@</td><td>%lu</td><td>%lu</td><td>%@</td><td>%@</td></tr>\n",
+             date,
+             (unsigned long)hostCount,
+             (unsigned long)maxConnections,
+             (unsigned long long)avgRate,
+             (unsigned long)maliciousCount,
+             date,
+             [self formattedRate:avgRate],
+             [self formattedRate:maxRate],
+             (unsigned long)hostCount,
+             (unsigned long)maxConnections,
+             maliciousBadge,
+             [SNBByteFormatter stringFromBytes:totalBytes]];
+        }
+        [dailySection appendString:@"</tbody></table>\n"];
+        [dailySection appendString:@"</div>\n"];
+
         [records enumerateObjectsUsingBlock:^(NSDictionary *record, NSUInteger idx, BOOL *stop) {
             NSString *date = record[kStatsKeyDate] ?: @"";
             uint64_t totalBytes = [record[kStatsKeyTotalBytes] unsignedLongLongValue];
@@ -762,35 +795,35 @@ static NSString * const kMaliciousKeyScore = @"score";
             NSArray<NSDictionary *> *hosts = [self hostsForDay:date];
             NSArray<NSDictionary *> *connections = [self connectionsForDay:date];
 
-            [html appendFormat:@"<details id=\"%@\" open>\n", detailsId];
-            [html appendFormat:@"<summary>%@ - %@ total, %@ avg rate</summary>\n",
+            [dailySection appendFormat:@"<details id=\"%@\" class=\"detail-card\">\n", detailsId];
+            [dailySection appendFormat:@"<summary>%@ - %@ total, %@ avg rate</summary>\n",
              date,
              [SNBByteFormatter stringFromBytes:totalBytes],
              [self formattedRate:avgRate]];
 
-            [html appendString:@"<div class=\"controls\">"];
-            [html appendFormat:@"<label>Hosts sort <select data-target=\"%@\">", hostsTableId];
-            [html appendString:@"<option value=\"bytes_desc\" selected>Bytes</option>"];
-            [html appendString:@"<option value=\"packets_desc\">Packets</option>"];
-            [html appendString:@"<option value=\"host_asc\">Host</option>"];
-            [html appendString:@"</select></label>"];
-            [html appendFormat:@"<label>Connections sort <select data-target=\"%@\">", connectionsTableId];
-            [html appendString:@"<option value=\"bytes_desc\" selected>Bytes</option>"];
-            [html appendString:@"<option value=\"packets_desc\">Packets</option>"];
-            [html appendString:@"<option value=\"connection_asc\">Connection</option>"];
-            [html appendString:@"</select></label>"];
-            [html appendString:@"</div>"];
+            [dailySection appendString:@"<div class=\"controls\">"];
+            [dailySection appendFormat:@"<label>Hosts sort <select data-target=\"%@\">", hostsTableId];
+            [dailySection appendString:@"<option value=\"bytes_desc\" selected>Bytes</option>"];
+            [dailySection appendString:@"<option value=\"packets_desc\">Packets</option>"];
+            [dailySection appendString:@"<option value=\"host_asc\">Host</option>"];
+            [dailySection appendString:@"</select></label>"];
+            [dailySection appendFormat:@"<label>Connections sort <select data-target=\"%@\">", connectionsTableId];
+            [dailySection appendString:@"<option value=\"bytes_desc\" selected>Bytes</option>"];
+            [dailySection appendString:@"<option value=\"packets_desc\">Packets</option>"];
+            [dailySection appendString:@"<option value=\"connection_asc\">Connection</option>"];
+            [dailySection appendString:@"</select></label>"];
+            [dailySection appendString:@"</div>"];
 
-            [html appendString:@"<h3 class=\"section-title\">Hosts</h3>\n"];
+            [dailySection appendString:@"<h3 class=\"section-title\">Hosts</h3>\n"];
             if (hosts.count == 0) {
-                [html appendString:@"<p class=\"muted\">No host activity recorded.</p>\n"];
+                [dailySection appendString:@"<p class=\"empty\">No host activity recorded.</p>\n"];
             } else {
-                [html appendFormat:@"<table id=\"%@\"><thead><tr><th>Host</th><th>Bytes</th><th>Packets</th></tr></thead><tbody>\n", hostsTableId];
+                [dailySection appendFormat:@"<div class=\"table-wrap\"><table id=\"%@\"><thead><tr><th>Host</th><th>Bytes</th><th>Packets</th></tr></thead><tbody>\n", hostsTableId];
                 for (NSDictionary *host in hosts) {
                     NSString *address = host[kHostKeyAddress] ?: @"";
                     uint64_t bytes = [host[kHostKeyBytes] unsignedLongLongValue];
                     uint64_t packets = [host[kHostKeyPackets] unsignedLongLongValue];
-                    [html appendFormat:@"<tr data-host=\"%@\" data-bytes=\"%llu\" data-packets=\"%llu\"><td>%@</td><td>%@</td><td>%llu</td></tr>\n",
+                    [dailySection appendFormat:@"<tr data-host=\"%@\" data-bytes=\"%llu\" data-packets=\"%llu\"><td>%@</td><td>%@</td><td>%llu</td></tr>\n",
                      address,
                      (unsigned long long)bytes,
                      (unsigned long long)packets,
@@ -798,15 +831,15 @@ static NSString * const kMaliciousKeyScore = @"score";
                      [SNBByteFormatter stringFromBytes:bytes],
                      (unsigned long long)packets];
                 }
-                [html appendString:@"</tbody></table>\n"];
+                [dailySection appendString:@"</tbody></table></div>\n"];
             }
 
             NSArray<NSDictionary *> *malicious = maliciousByDay[date] ?: @[];
-            [html appendString:@"<h3 class=\"section-title\">Malicious Connections</h3>\n"];
+            [dailySection appendString:@"<h3 class=\"section-title\">Malicious Connections</h3>\n"];
             if (malicious.count == 0) {
-                [html appendString:@"<p class=\"muted\">No malicious connections detected.</p>\n"];
+                [dailySection appendString:@"<p class=\"empty\">No malicious connections detected.</p>\n"];
             } else {
-                [html appendString:@"<table><thead><tr><th>Indicator</th><th>Connection</th><th>Score</th><th>Verdict</th><th>Confidence</th><th>Bytes</th><th>Packets</th><th>Providers</th><th>Explanation</th></tr></thead><tbody>\n"];
+                [dailySection appendString:@"<div class=\"table-wrap\"><table><thead><tr><th>Indicator</th><th>Connection</th><th>Score</th><th>Verdict</th><th>Confidence</th><th>Bytes</th><th>Packets</th><th>Providers</th><th>Explanation</th></tr></thead><tbody>\n"];
                 for (NSDictionary *entry in malicious) {
                     NSString *indicator = entry[kMaliciousKeyIndicator] ?: @"";
                     NSString *source = entry[kConnectionKeySource] ?: @"";
@@ -825,26 +858,35 @@ static NSString * const kMaliciousKeyScore = @"score";
                     NSString *connectionLabel = [NSString stringWithFormat:@"%@:%ld -> %@:%ld",
                                                  source, (long)sourcePort.integerValue,
                                                  destination, (long)destinationPort.integerValue];
-                    [html appendFormat:@"<tr><td>%@</td><td>%@</td><td>%ld</td><td>%@</td><td>%@</td>"
-                     "<td>%@</td><td>%llu</td><td>%@</td><td>%@</td></tr>\n",
+                    NSString *scoreClass = @"pill";
+                    if (score >= 80) {
+                        scoreClass = @"pill pill--danger";
+                    } else if (score >= 50) {
+                        scoreClass = @"pill pill--warn";
+                    }
+                    NSString *verdictBadge = verdict.length > 0
+                        ? [NSString stringWithFormat:@"<span class=\"%@\">%@</span>", scoreClass, verdict]
+                        : @"<span class=\"pill\">-</span>";
+                    [dailySection appendFormat:@"<tr><td>%@</td><td>%@</td><td>%ld</td><td>%@</td><td>%@</td>"
+                     "<td>%@</td><td>%llu</td><td>%@</td><td class=\"col-explain\">%@</td></tr>\n",
                      indicator,
                      connectionLabel,
                      (long)score,
-                     verdict,
+                     verdictBadge,
                      confidence,
                      [SNBByteFormatter stringFromBytes:bytes],
                      (unsigned long long)packets,
                      providersHtml,
                      explanation];
                 }
-                [html appendString:@"</tbody></table>\n"];
+                [dailySection appendString:@"</tbody></table></div>\n"];
             }
 
-            [html appendString:@"<h3 class=\"section-title\">Connections</h3>\n"];
+            [dailySection appendString:@"<h3 class=\"section-title\">Connections</h3>\n"];
             if (connections.count == 0) {
-                [html appendString:@"<p class=\"muted\">No connection activity recorded.</p>\n"];
+                [dailySection appendString:@"<p class=\"empty\">No connection activity recorded.</p>\n"];
             } else {
-                [html appendFormat:@"<table id=\"%@\"><thead><tr><th>Connection</th><th>Bytes</th><th>Packets</th></tr></thead><tbody>\n", connectionsTableId];
+                [dailySection appendFormat:@"<div class=\"table-wrap\"><table id=\"%@\"><thead><tr><th>Connection</th><th>Bytes</th><th>Packets</th></tr></thead><tbody>\n", connectionsTableId];
                 for (NSDictionary *connection in connections) {
                     NSString *source = connection[kConnectionKeySource] ?: @"";
                     NSString *destination = connection[kConnectionKeyDestination] ?: @"";
@@ -855,7 +897,7 @@ static NSString * const kMaliciousKeyScore = @"score";
                     NSString *connectionLabel = [NSString stringWithFormat:@"%@:%ld -> %@:%ld",
                                                  source, (long)sourcePort.integerValue,
                                                  destination, (long)destinationPort.integerValue];
-                    [html appendFormat:@"<tr data-connection=\"%@\" data-bytes=\"%llu\" data-packets=\"%llu\"><td>%@</td><td>%@</td><td>%llu</td></tr>\n",
+                    [dailySection appendFormat:@"<tr data-connection=\"%@\" data-bytes=\"%llu\" data-packets=\"%llu\"><td>%@</td><td>%@</td><td>%llu</td></tr>\n",
                      connectionLabel,
                      (unsigned long long)bytes,
                      (unsigned long long)packets,
@@ -863,73 +905,29 @@ static NSString * const kMaliciousKeyScore = @"score";
                      [SNBByteFormatter stringFromBytes:bytes],
                      (unsigned long long)packets];
                 }
-                [html appendString:@"</tbody></table>\n"];
+                [dailySection appendString:@"</tbody></table></div>\n"];
             }
 
-            [html appendString:@"</details>\n"];
+            [dailySection appendString:@"</details>\n"];
         }];
     }
-    [html appendString:@"</div>\n"];
+    [dailySection appendString:@"</div>\n"];
+    [dailySection appendString:@"</details>\n"];
 
-    [html appendString:@"<script>\n"];
-    [html appendString:@"(function(){\n"];
-    [html appendString:@"function sortRows(tbody, compare){\n"];
-    [html appendString:@"  var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));\n"];
-    [html appendString:@"  rows.sort(compare);\n"];
-    [html appendString:@"  rows.forEach(function(row){ tbody.appendChild(row); });\n"];
-    [html appendString:@"}\n"];
-    [html appendString:@"var dailySelect = document.getElementById('dailySort');\n"];
-    [html appendString:@"var dailyBody = document.querySelector('#dailyTable tbody');\n"];
-    [html appendString:@"if (dailySelect && dailyBody) {\n"];
-    [html appendString:@"  var sortDaily = function(){\n"];
-    [html appendString:@"    var mode = dailySelect.value;\n"];
-    [html appendString:@"    sortRows(dailyBody, function(a, b){\n"];
-    [html appendString:@"      var ad = a.dataset.date || '';\n"];
-    [html appendString:@"      var bd = b.dataset.date || '';\n"];
-    [html appendString:@"      var ah = parseInt(a.dataset.hosts || '0', 10);\n"];
-    [html appendString:@"      var bh = parseInt(b.dataset.hosts || '0', 10);\n"];
-    [html appendString:@"      var ac = parseInt(a.dataset.connections || '0', 10);\n"];
-    [html appendString:@"      var bc = parseInt(b.dataset.connections || '0', 10);\n"];
-    [html appendString:@"      var ar = parseInt(a.dataset.rate || '0', 10);\n"];
-    [html appendString:@"      var br = parseInt(b.dataset.rate || '0', 10);\n"];
-    [html appendString:@"      if (mode === 'date_asc') { return ad.localeCompare(bd); }\n"];
-    [html appendString:@"      if (mode === 'date_desc') { return bd.localeCompare(ad); }\n"];
-    [html appendString:@"      if (mode === 'hosts_desc') { return bh - ah; }\n"];
-    [html appendString:@"      if (mode === 'connections_desc') { return bc - ac; }\n"];
-    [html appendString:@"      return br - ar;\n"];
-    [html appendString:@"    });\n"];
-    [html appendString:@"  };\n"];
-    [html appendString:@"  dailySelect.addEventListener('change', sortDaily);\n"];
-    [html appendString:@"  sortDaily();\n"];
-    [html appendString:@"}\n"];
-    [html appendString:@"document.querySelectorAll('select[data-target]').forEach(function(select){\n"];
-    [html appendString:@"  select.addEventListener('change', function(){\n"];
-    [html appendString:@"    var target = select.getAttribute('data-target');\n"];
-    [html appendString:@"    var table = document.getElementById(target);\n"];
-    [html appendString:@"    if (!table) { return; }\n"];
-    [html appendString:@"    var tbody = table.querySelector('tbody');\n"];
-    [html appendString:@"    if (!tbody) { return; }\n"];
-    [html appendString:@"    var mode = select.value;\n"];
-    [html appendString:@"    sortRows(tbody, function(a, b){\n"];
-    [html appendString:@"      var ab = parseInt(a.dataset.bytes || '0', 10);\n"];
-    [html appendString:@"      var bb = parseInt(b.dataset.bytes || '0', 10);\n"];
-    [html appendString:@"      var ap = parseInt(a.dataset.packets || '0', 10);\n"];
-    [html appendString:@"      var bp = parseInt(b.dataset.packets || '0', 10);\n"];
-    [html appendString:@"      var ah = a.dataset.host || '';\n"];
-    [html appendString:@"      var bh = b.dataset.host || '';\n"];
-    [html appendString:@"      var ac = a.dataset.connection || '';\n"];
-    [html appendString:@"      var bc = b.dataset.connection || '';\n"];
-    [html appendString:@"      if (mode === 'bytes_desc') { return bb - ab; }\n"];
-    [html appendString:@"      if (mode === 'packets_desc') { return bp - ap; }\n"];
-    [html appendString:@"      if (mode === 'host_asc') { return ah.localeCompare(bh); }\n"];
-    [html appendString:@"      return ac.localeCompare(bc);\n"];
-    [html appendString:@"    });\n"];
-    [html appendString:@"  });\n"];
-    [html appendString:@"});\n"];
-    [html appendString:@"})();\n"];
-    [html appendString:@"</script>\n"];
-
-    [html appendString:@"</body>\n</html>\n"];
+    NSMutableString *html = [templateHTML mutableCopy];
+    NSDictionary<NSString *, NSString *> *tokens = @{
+        @"{{GENERATED_AT}}": generatedAt ?: @"",
+        @"{{WEEKLY_SECTION}}": weeklySection,
+        @"{{DAILY_SECTION}}": dailySection,
+        @"{{MALICIOUS_SECTION}}": maliciousSection,
+        @"{{DETAILS_SECTION}}": @""
+    };
+    [tokens enumerateKeysAndObjectsUsingBlock:^(NSString *token, NSString *value, BOOL *stop) {
+        [html replaceOccurrencesOfString:token
+                               withString:value ?: @""
+                                  options:0
+                                    range:NSMakeRange(0, html.length)];
+    }];
 
     NSError *error = nil;
     [html writeToFile:[self reportPath] atomically:YES encoding:NSUTF8StringEncoding error:&error];
@@ -1131,7 +1129,7 @@ static NSString * const kMaliciousKeyScore = @"score";
     if (!response || response.providerResults.count == 0) {
         return @"<span class=\"muted\">None</span>";
     }
-    NSMutableString *html = [NSMutableString stringWithString:@"<ul>"];
+    NSMutableString *html = [NSMutableString stringWithString:@"<ul class=\"list\">"];
     for (TIResult *result in response.providerResults) {
         NSString *provider = result.providerName ?: @"";
         NSMutableArray<NSString *> *parts = [NSMutableArray array];

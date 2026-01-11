@@ -163,6 +163,10 @@ static NSString *SNBTeamIdentifierForSelf(void) {
         return NO;
     }
 
+    [self.packetCapture stopAllSessionsWithReply:^{
+        NSLog(@"Helper: Cleared existing capture sessions for new connection");
+    }];
+
     NSXPCInterface *interface = [NSXPCInterface interfaceWithProtocol:@protocol(SNBPrivilegedHelperProtocol)];
     SNBConfigureHelperInterface(interface);
     newConnection.exportedInterface = interface;
@@ -170,10 +174,16 @@ static NSString *SNBTeamIdentifierForSelf(void) {
 
     newConnection.invalidationHandler = ^{
         NSLog(@"Helper: Connection invalidated");
+        [self.packetCapture stopAllSessionsWithReply:^{
+            NSLog(@"Helper: Cleared capture sessions after invalidation");
+        }];
     };
 
     newConnection.interruptionHandler = ^{
         NSLog(@"Helper: Connection interrupted");
+        [self.packetCapture stopAllSessionsWithReply:^{
+            NSLog(@"Helper: Cleared capture sessions after interruption");
+        }];
     };
 
     [newConnection resume];

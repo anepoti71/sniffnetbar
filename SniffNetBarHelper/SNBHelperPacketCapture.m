@@ -245,4 +245,24 @@ static const NSUInteger kSNBMaxActiveCaptureSessions = 4;
     return info;
 }
 
+- (void)stopAllSessionsWithReply:(void (^)(void))reply {
+    dispatch_async(self.managementQueue, ^{
+        NSArray<SNBHelperCaptureSession *> *activeSessions = self.sessions.allValues;
+        [self.sessions removeAllObjects];
+
+        for (SNBHelperCaptureSession *session in activeSessions) {
+            dispatch_sync(session.queue, ^{
+                if (session.pcapHandle) {
+                    pcap_close(session.pcapHandle);
+                    session.pcapHandle = NULL;
+                }
+            });
+        }
+
+        if (reply) {
+            reply();
+        }
+    });
+}
+
 @end

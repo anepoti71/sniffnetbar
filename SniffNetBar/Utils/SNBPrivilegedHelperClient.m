@@ -172,6 +172,26 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
     return proxy;
 }
 
+- (id<SNBPrivilegedHelperProtocol>)helperProxyWithErrorHandler:(void (^)(NSError *error))errorHandler {
+    __block id<SNBPrivilegedHelperProtocol> proxy = nil;
+    dispatch_sync(self.connectionQueue, ^{
+        if (!self.connection) {
+            [self createConnection];
+            if (!self.connection) {
+                SNBLogError("No helper connection available");
+                return;
+            }
+        }
+        proxy = [self.connection remoteObjectProxyWithErrorHandler:^(NSError *error) {
+            SNBLogError("Helper proxy error: %{public}s", error.localizedDescription.UTF8String);
+            if (errorHandler) {
+                errorHandler(error);
+            }
+        }];
+    });
+    return proxy;
+}
+
 - (void)createConnection {
     SNBLogInfo("Connecting to privileged helper...");
 
@@ -203,7 +223,16 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
 }
 
 - (void)getVersionWithCompletion:(void (^)(NSString * _Nullable, NSError * _Nullable))completion {
-    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    __block BOOL completed = NO;
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxyWithErrorHandler:^(NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
+        if (completion) {
+            completion(nil, error);
+        }
+    }];
     if (!helper) {
         if (completion) {
             NSError *error = [NSError errorWithDomain:@"SNBHelperClient"
@@ -215,6 +244,10 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
     }
 
     [helper getVersionWithReply:^(NSString *version) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
         if (completion) {
             completion(version, nil);
         }
@@ -222,7 +255,16 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
 }
 
 - (void)enumerateDevicesWithCompletion:(void (^)(NSArray<NetworkDevice *> *, NSError *))completion {
-    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    __block BOOL completed = NO;
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxyWithErrorHandler:^(NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
+        if (completion) {
+            completion(nil, error);
+        }
+    }];
     if (!helper) {
         if (completion) {
             NSError *error = [NSError errorWithDomain:@"SNBHelperClient"
@@ -234,6 +276,10 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
     }
 
     [helper enumerateNetworkDevicesWithReply:^(NSArray<NSDictionary *> *devices, NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
         if (error) {
             if (completion) {
                 completion(nil, error);
@@ -257,7 +303,16 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
 
 - (void)startCaptureOnDevice:(NSString *)deviceName
                   completion:(void (^)(NSString * _Nullable, NSError * _Nullable))completion {
-    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    __block BOOL completed = NO;
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxyWithErrorHandler:^(NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
+        if (completion) {
+            completion(nil, error);
+        }
+    }];
     if (!helper) {
         if (completion) {
             NSError *error = [NSError errorWithDomain:@"SNBHelperClient"
@@ -269,6 +324,10 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
     }
 
     [helper startCaptureOnDevice:deviceName withReply:^(NSString *sessionID, NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
         if (completion) {
             completion(sessionID, error);
         }
@@ -277,7 +336,16 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
 
 - (void)stopCaptureForSession:(NSString *)sessionID
                    completion:(void (^)(NSError * _Nullable))completion {
-    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    __block BOOL completed = NO;
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxyWithErrorHandler:^(NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
+        if (completion) {
+            completion(error);
+        }
+    }];
     if (!helper) {
         if (completion) {
             NSError *error = [NSError errorWithDomain:@"SNBHelperClient"
@@ -289,6 +357,10 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
     }
 
     [helper stopCaptureForSession:sessionID withReply:^(NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
         if (completion) {
             completion(error);
         }
@@ -297,7 +369,16 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
 
 - (void)getNextPacketForSession:(NSString *)sessionID
                      completion:(void (^)(PacketInfo * _Nullable, NSError * _Nullable))completion {
-    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    __block BOOL completed = NO;
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxyWithErrorHandler:^(NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
+        if (completion) {
+            completion(nil, error);
+        }
+    }];
     if (!helper) {
         if (completion) {
             completion(nil, nil);
@@ -306,6 +387,10 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
     }
 
     [helper getNextPacketForSession:sessionID withReply:^(NSDictionary *packetInfo, NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
         if (error) {
             if (completion) {
                 completion(nil, error);
@@ -332,7 +417,16 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
                        destinationAddr:(NSString *)destinationAddr
                        destinationPort:(NSInteger)destinationPort
                             completion:(void (^)(ProcessInfo * _Nullable, NSError * _Nullable))completion {
-    id<SNBPrivilegedHelperProtocol> helper = [self helperProxy];
+    __block BOOL completed = NO;
+    id<SNBPrivilegedHelperProtocol> helper = [self helperProxyWithErrorHandler:^(NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
+        if (completion) {
+            completion(nil, error);
+        }
+    }];
     if (!helper) {
         if (completion) {
             completion(nil, nil);
@@ -345,6 +439,10 @@ static void SNBConfigureHelperInterface(NSXPCInterface *interface) {
                         destinationAddress:destinationAddr
                            destinationPort:destinationPort
                                  withReply:^(NSDictionary *processInfo, NSError *error) {
+        if (completed) {
+            return;
+        }
+        completed = YES;
         if (error) {
             if (completion) {
                 completion(nil, error);
