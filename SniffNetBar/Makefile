@@ -40,7 +40,7 @@ HELPER_INCLUDES = -I../SniffNetBar -I../SniffNetBar/Models -I../SniffNetBar/Netw
 CORE_SOURCES = Core/main.m Core/AppDelegate.m Core/AppCoordinator.m \
                Core/AnomalyExplainabilityCoordinator.m
 CONFIG_SOURCES = Config/ConfigurationManager.m Config/KeychainManager.m Config/UserDefaultsKeys.m
-MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m \
+MODEL_SOURCES = Models/PacketInfo.m Models/TrafficStatistics.m Models/StatisticsHistory.m \
                 Models/AnomalyDetector.m Models/AnomalyStore.m \
                 Models/AnomalyPythonScorer.m Models/AnomalyCoreMLScorer.m \
                 Models/AnomalyExplanationService.m

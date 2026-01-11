@@ -37,6 +37,8 @@
 - (void)toggleShowMap:(NSMenuItem *)sender;
 - (void)selectMapProvider:(NSMenuItem *)sender;
 - (void)toggleThreatIntel:(NSMenuItem *)sender;
+- (void)toggleDailyStatistics:(NSMenuItem *)sender;
+- (void)openStatisticsReport:(NSMenuItem *)sender;
 - (void)deviceSelected:(NSMenuItem *)sender;
 
 // Menu delegate methods

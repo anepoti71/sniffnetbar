@@ -95,6 +95,8 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         _showTopHosts = YES;
         _showTopConnections = YES;
         _showMap = NO;
+        _dailyStatsEnabled = YES;
+        _statsReportAvailable = NO;
         _cachedMenuItems = [NSMutableDictionary dictionary];
         _menuStructureBuilt = NO;
 
@@ -513,6 +515,20 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     toggleAssetMonitor.target = target;
     toggleAssetMonitor.state = assetMonitorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [settingsSubmenu addItem:toggleAssetMonitor];
+
+    NSMenuItem *toggleDailyStats = [[NSMenuItem alloc] initWithTitle:@"Enable Daily Statistics"
+                                                              action:@selector(toggleDailyStatistics:)
+                                                       keyEquivalent:@""];
+    toggleDailyStats.target = target;
+    toggleDailyStats.state = self.dailyStatsEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [settingsSubmenu addItem:toggleDailyStats];
+
+    NSMenuItem *openReport = [[NSMenuItem alloc] initWithTitle:@"Open Statistics Report"
+                                                        action:@selector(openStatisticsReport:)
+                                                 keyEquivalent:@""];
+    openReport.target = target;
+    openReport.enabled = self.statsReportAvailable;
+    [settingsSubmenu addItem:openReport];
 
     // Add separator before reset button
     [settingsSubmenu addItem:[NSMenuItem separatorItem]];

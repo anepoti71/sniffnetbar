@@ -21,6 +21,7 @@
 #import "KeychainManager.h"
 #import "NetworkAssetMonitor.h"
 #import "UserDefaultsKeys.h"
+#import "StatisticsHistory.h"
 
 @interface AppCoordinator () <MenuBuilderDelegate>
 @property (nonatomic, strong, readwrite) TrafficStatistics *statistics;
@@ -38,6 +39,7 @@
 @property (nonatomic, weak) NSMenu *statusMenu;
 @property (nonatomic, assign) BOOL menuRefreshPending;
 @property (nonatomic, strong) SNBNetworkAssetMonitor *assetMonitor;
+@property (nonatomic, strong) SNBStatisticsHistory *statisticsHistory;
 @end
 
 @implementation AppCoordinator
@@ -65,12 +67,14 @@
                                              initWithConfiguration:_configuration
                                              threatIntelCoordinator:_threatIntelCoordinator];
         _assetMonitor = [[SNBNetworkAssetMonitor alloc] init];
+        _statisticsHistory = [[SNBStatisticsHistory alloc] init];
 
         // Set up callback for packet updates
         __weak typeof(self) weakSelf = self;
         _deviceManager.packetManager.onPacketReceived = ^(PacketInfo *packetInfo) {
             [weakSelf.statistics processPacket:packetInfo];
             [weakSelf.anomalyDetector processPacket:packetInfo];
+            [weakSelf.statisticsHistory processPacket:packetInfo];
         };
     }
     return self;
@@ -90,6 +94,9 @@
     // Start asset monitor if enabled
     BOOL assetMonitorEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:SNBUserDefaultsKeyAssetMonitorEnabled];
     self.assetMonitor.enabled = assetMonitorEnabled;
+    NSNumber *dailyStatsValue = [[NSUserDefaults standardUserDefaults] objectForKey:SNBUserDefaultsKeyDailyStatisticsEnabled];
+    BOOL dailyStatsEnabled = dailyStatsValue ? [dailyStatsValue boolValue] : YES;
+    self.statisticsHistory.enabled = dailyStatsEnabled;
     __weak typeof(self) weakSelfAsset = self;
     self.assetMonitor.onAssetsUpdated = ^(NSArray<SNBNetworkAsset *> *assets, NSArray<SNBNetworkAsset *> *newAssets) {
         [weakSelfAsset scheduleMenuRefresh];
@@ -134,6 +141,7 @@
     [self.deviceManager.packetManager stopCapture];
     [self.anomalyDetector flushIfNeeded];
     [self.assetMonitor stop];
+    [self.statisticsHistory flush];
 }
 
 - (void)startCaptureWithCurrentDevice {
@@ -195,6 +203,8 @@
 }
 
 - (void)updateMenuWithStats:(TrafficStats *)stats {
+    self.menuBuilder.dailyStatsEnabled = self.statisticsHistory.isEnabled;
+    self.menuBuilder.statsReportAvailable = [self.statisticsHistory reportExists];
     if (self.menuBuilder.showTopConnections && self.threatIntelCoordinator.isEnabled) {
         for (ConnectionTraffic *connection in stats.topConnections) {
             [self.threatIntelCoordinator enrichIPIfNeeded:connection.destinationAddress
@@ -257,6 +267,23 @@
 - (void)toggleThreatIntel:(NSMenuItem *)sender {
     [self.threatIntelCoordinator toggleEnabled];
     [self updateMenu];
+}
+
+- (void)toggleDailyStatistics:(NSMenuItem *)sender {
+    BOOL enabled = !self.statisticsHistory.isEnabled;
+    self.statisticsHistory.enabled = enabled;
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:SNBUserDefaultsKeyDailyStatisticsEnabled];
+    [self updateMenu];
+}
+
+- (void)openStatisticsReport:(NSMenuItem *)sender {
+    [self.statisticsHistory generateReport];
+    NSString *path = [self.statisticsHistory reportPath];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        [[NSWorkspace sharedWorkspace] openFile:path];
+    } else {
+        SNBLogWarn("Statistics report not found at %{public}@", path);
+    }
 }
 
 - (void)toggleAssetMonitor:(NSMenuItem *)sender {

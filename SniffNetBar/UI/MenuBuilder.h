@@ -22,6 +22,8 @@
 @property (nonatomic, assign) BOOL showTopHosts;
 @property (nonatomic, assign) BOOL showTopConnections;
 @property (nonatomic, assign) BOOL showMap;
+@property (nonatomic, assign) BOOL dailyStatsEnabled;
+@property (nonatomic, assign) BOOL statsReportAvailable;
 @property (nonatomic, copy, readonly) NSString *mapProviderName;
 @property (nonatomic, assign, readonly) BOOL menuIsOpen;
 

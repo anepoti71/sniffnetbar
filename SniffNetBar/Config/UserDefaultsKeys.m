@@ -12,4 +12,5 @@ SNBUserDefaultsKey const SNBUserDefaultsKeyMapProviderLatKey = @"MapProviderLatK
 SNBUserDefaultsKey const SNBUserDefaultsKeyMapProviderLonKey = @"MapProviderLonKey";
 SNBUserDefaultsKey const SNBUserDefaultsKeyThreatIntelEnabled = @"ThreatIntelEnabled";
 SNBUserDefaultsKey const SNBUserDefaultsKeyAssetMonitorEnabled = @"AssetMonitorEnabled";
+SNBUserDefaultsKey const SNBUserDefaultsKeyDailyStatisticsEnabled = @"DailyStatisticsEnabled";
 SNBUserDefaultsKey const SNBUserDefaultsKeyKnownNetworkDevices = @"KnownNetworkDevices";
