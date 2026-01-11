@@ -266,6 +266,11 @@
     [self updateMenu];
 }
 
+- (void)resetStatistics:(NSMenuItem *)sender {
+    [self.statistics reset];
+    [self updateMenu];
+}
+
 - (void)menuWillOpenWithStats {
     __weak typeof(self) weakSelf = self;
     [self.statistics getCurrentStatsWithCompletion:^(TrafficStats *stats) {

@@ -514,6 +514,16 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     toggleAssetMonitor.state = assetMonitorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [settingsSubmenu addItem:toggleAssetMonitor];
 
+    // Add separator before reset button
+    [settingsSubmenu addItem:[NSMenuItem separatorItem]];
+
+    // Add Reset Statistics button
+    NSMenuItem *resetItem = [[NSMenuItem alloc] initWithTitle:@"Reset Statistics"
+                                                       action:@selector(resetStatistics:)
+                                                keyEquivalent:@""];
+    resetItem.target = target;
+    [settingsSubmenu addItem:resetItem];
+
     NSMenuItem *visualizationItem = [[NSMenuItem alloc] initWithTitle:@"Visualization" action:nil keyEquivalent:@""];
     NSMenu *visualizationSubmenu = [[NSMenu alloc] init];
     visualizationItem.submenu = visualizationSubmenu;
