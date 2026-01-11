@@ -247,6 +247,81 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     }];
 }
 
+- (NSArray<NSDictionary *> *)maliciousConnectionsFromStats:(TrafficStats *)stats
+                                      threatIntelResults:(NSDictionary<NSString *, TIEnrichmentResponse *> *)threatIntelResults {
+    if (!stats || threatIntelResults.count == 0) {
+        return @[];
+    }
+    NSMutableArray<NSDictionary *> *malicious = [NSMutableArray array];
+    for (ConnectionTraffic *connection in stats.topConnections) {
+        TIEnrichmentResponse *srcResponse = threatIntelResults[connection.sourceAddress];
+        TIEnrichmentResponse *dstResponse = threatIntelResults[connection.destinationAddress];
+        TIScoringResult *srcScore = srcResponse.scoringResult;
+        TIScoringResult *dstScore = dstResponse.scoringResult;
+
+        TIEnrichmentResponse *bestResponse = nil;
+        NSString *indicator = nil;
+        NSInteger bestScore = 0;
+
+        if (dstScore && dstScore.finalScore > 0) {
+            bestResponse = dstResponse;
+            indicator = connection.destinationAddress;
+            bestScore = dstScore.finalScore;
+        }
+        if (srcScore && srcScore.finalScore > 0 && srcScore.finalScore > bestScore) {
+            bestResponse = srcResponse;
+            indicator = connection.sourceAddress;
+            bestScore = srcScore.finalScore;
+        }
+
+        if (bestResponse) {
+            [malicious addObject:@{
+                @"connection": connection,
+                @"response": bestResponse,
+                @"indicator": indicator ?: @"",
+                @"score": @(bestScore)
+            }];
+        }
+    }
+
+    if (malicious.count == 0) {
+        return @[];
+    }
+    return [malicious sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *obj1, NSDictionary *obj2) {
+        NSInteger score1 = [obj1[@"score"] integerValue];
+        NSInteger score2 = [obj2[@"score"] integerValue];
+        if (score1 == score2) {
+            return NSOrderedSame;
+        }
+        return score1 > score2 ? NSOrderedAscending : NSOrderedDescending;
+    }];
+}
+
+- (NSString *)providerSummaryForResponse:(TIEnrichmentResponse *)response {
+    if (!response || response.providerResults.count == 0) {
+        return @"Unknown";
+    }
+    NSMutableArray<NSString *> *providers = [NSMutableArray array];
+    for (TIResult *result in response.providerResults) {
+        if (result.providerName.length == 0) {
+            continue;
+        }
+        if (result.verdict) {
+            NSString *hitLabel = result.verdict.hit ? @"hit" : @"no hit";
+            [providers addObject:[NSString stringWithFormat:@"%@ (%@ %ld%%)",
+                                  result.providerName,
+                                  hitLabel,
+                                  (long)result.verdict.confidence]];
+        } else {
+            [providers addObject:result.providerName];
+        }
+    }
+    if (providers.count == 0) {
+        return @"Unknown";
+    }
+    return [providers componentsJoinedByString:@", "];
+}
+
 - (NSString *)severityBadgeForVerdict:(TIThreatVerdict)verdict {
     switch (verdict) {
         case TIThreatVerdictMalicious:
@@ -1266,6 +1341,62 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                     threatItem.enabled = NO;
                     [detailsSubmenu addItem:threatItem];
                 }
+            }
+        }
+
+        NSArray<NSDictionary *> *maliciousConnections = [self maliciousConnectionsFromStats:stats
+                                                                        threatIntelResults:threatIntelResults];
+        if (maliciousConnections.count > 0) {
+            [detailsSubmenu addItem:[NSMenuItem separatorItem]];
+            NSMenuItem *maliciousTitle = [[NSMenuItem alloc] initWithTitle:@"MALICIOUS CONNECTIONS"
+                                                                    action:nil
+                                                             keyEquivalent:@""];
+            maliciousTitle.enabled = NO;
+            [detailsSubmenu addItem:maliciousTitle];
+
+            NSInteger limit = MIN(config.maxTopConnectionsToShow, maliciousConnections.count);
+            for (NSInteger i = 0; i < limit; i++) {
+                NSDictionary *entry = maliciousConnections[i];
+                ConnectionTraffic *connection = entry[@"connection"];
+                TIEnrichmentResponse *response = entry[@"response"];
+                NSString *indicator = entry[@"indicator"] ?: @"";
+                TIScoringResult *scoring = response.scoringResult;
+                NSString *bytesStr = [SNBByteFormatter stringFromBytes:connection.bytes];
+                NSString *providers = [self providerSummaryForResponse:response];
+                NSString *processInfo = @"";
+                if (connection.processName.length > 0 && connection.processPID > 0) {
+                    processInfo = [NSString stringWithFormat:@" [%@:%d]", connection.processName, connection.processPID];
+                }
+                NSString *indicatorText = indicator.length > 0 ? [NSString stringWithFormat:@"indicator %@", indicator] : @"indicator unknown";
+                NSString *displayStr = [NSString stringWithFormat:@"  %@:%ld -> %@:%ld - %@ - score %ld - %@%@",
+                                        connection.sourceAddress,
+                                        (long)connection.sourcePort,
+                                        connection.destinationAddress,
+                                        (long)connection.destinationPort,
+                                        bytesStr,
+                                        (long)scoring.finalScore,
+                                        indicatorText,
+                                        processInfo];
+                NSMenuItem *maliciousItem = [[NSMenuItem alloc] initWithTitle:displayStr
+                                                                      action:nil
+                                                               keyEquivalent:@""];
+                maliciousItem.enabled = NO;
+                [detailsSubmenu addItem:maliciousItem];
+
+                NSString *providerLine = [NSString stringWithFormat:@"    Providers: %@", providers];
+                NSMenuItem *providersItem = [[NSMenuItem alloc] initWithTitle:providerLine
+                                                                       action:nil
+                                                                keyEquivalent:@""];
+                providersItem.enabled = NO;
+                [detailsSubmenu addItem:providersItem];
+            }
+            if (maliciousConnections.count > limit) {
+                NSMenuItem *moreItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"  ... and %lu more",
+                                                                         (unsigned long)(maliciousConnections.count - limit)]
+                                                                 action:nil
+                                                          keyEquivalent:@""];
+                moreItem.enabled = NO;
+                [detailsSubmenu addItem:moreItem];
             }
         }
 

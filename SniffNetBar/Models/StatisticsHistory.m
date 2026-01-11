@@ -9,6 +9,8 @@
 #import "PacketInfo.h"
 #import "ByteFormatter.h"
 #import "Logger.h"
+#import "ThreatIntelModels.h"
+#import "ThreatIntelStore.h"
 #import <sqlite3.h>
 #import <ifaddrs.h>
 #import <arpa/inet.h>
@@ -38,6 +40,9 @@ static NSString * const kConnectionKeyBytes = @"bytes";
 static NSString * const kConnectionKeyPackets = @"packets";
 static NSString * const kConnectionKeySourcePort = @"sourcePort";
 static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
+static NSString * const kMaliciousKeyIndicator = @"indicator";
+static NSString * const kMaliciousKeyResponse = @"response";
+static NSString * const kMaliciousKeyScore = @"score";
 
 @interface SNBConnectionStats : NSObject
 @property (nonatomic, copy) NSString *sourceAddress;
@@ -65,6 +70,7 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
 @property (nonatomic, strong) NSMutableDictionary<NSString *, SNBConnectionStats *> *connectionStats;
 @property (nonatomic, strong) NSSet<NSString *> *localAddresses;
 @property (nonatomic, assign) sqlite3 *db;
+@property (nonatomic, strong) ThreatIntelStore *threatIntelStore;
 @end
 
 @implementation SNBStatisticsHistory
@@ -80,6 +86,7 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
         _connectionStats = [NSMutableDictionary dictionary];
         _localAddresses = [self loadLocalAddresses];
         _enabled = YES;
+        _threatIntelStore = [[ThreatIntelStore alloc] initWithTTLSeconds:0];
 
         [self openDatabase];
         [self ensureSchema];
@@ -604,6 +611,7 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
     [html appendString:@"th,td{padding:8px 6px;border-bottom:1px solid #e6e0d4;text-align:left;vertical-align:top;}\n"];
     [html appendString:@"th{background:#f0e9db;font-weight:600;}\n"];
     [html appendString:@".muted{color:#6b6b6b;font-size:12px;}\n"];
+    [html appendString:@"ul{padding-left:18px;margin:6px 0;}\n"];
     [html appendString:@".controls{display:flex;flex-wrap:wrap;gap:12px;margin:10px 0 16px 0;font-size:12px;}\n"];
     [html appendString:@".controls label{display:flex;align-items:center;gap:6px;}\n"];
     [html appendString:@"details{margin:12px 0;border:1px solid #eee3cf;border-radius:8px;padding:10px;background:#fffaf1;}\n"];
@@ -615,6 +623,23 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
 
     NSArray<NSDictionary *> *records = [self dailyRecordsFromDatabase];
     NSDictionary *weekly = [self weeklySummaryFromRecords:records];
+    NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *maliciousByDay = [NSMutableDictionary dictionary];
+    NSMutableArray<NSDictionary *> *allMalicious = [NSMutableArray array];
+    for (NSDictionary *record in records) {
+        NSString *date = record[kStatsKeyDate] ?: @"";
+        if (date.length == 0) {
+            continue;
+        }
+        NSArray<NSDictionary *> *malicious = [self maliciousConnectionsForDay:date];
+        if (malicious.count > 0) {
+            maliciousByDay[date] = malicious;
+            for (NSDictionary *entry in malicious) {
+                NSMutableDictionary *entryWithDate = [entry mutableCopy];
+                entryWithDate[kStatsKeyDate] = date;
+                [allMalicious addObject:entryWithDate];
+            }
+        }
+    }
 
     [html appendString:@"<div class=\"card\">\n<h2>Weekly Summary</h2>\n"];
     if (weekly.count == 0) {
@@ -650,7 +675,7 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
         [html appendString:@"</div>\n"];
 
         [html appendString:@"<table id=\"dailyTable\">\n"];
-        [html appendString:@"<thead><tr><th>Date</th><th>Avg Rate</th><th>Max Rate</th><th>Hosts</th><th>Max Connections/s</th><th>Total Bytes</th></tr></thead>\n"];
+        [html appendString:@"<thead><tr><th>Date</th><th>Avg Rate</th><th>Max Rate</th><th>Hosts</th><th>Max Connections/s</th><th>Malicious</th><th>Total Bytes</th></tr></thead>\n"];
         [html appendString:@"<tbody>\n"];
         for (NSDictionary *record in records) {
             NSString *date = record[kStatsKeyDate] ?: @"";
@@ -660,9 +685,10 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
             NSUInteger hostCount = [record[kStatsKeyUniqueHosts] unsignedIntegerValue];
             NSTimeInterval activeSeconds = [self activeSecondsForRecord:record];
             uint64_t avgRate = activeSeconds > 0 ? (uint64_t)(totalBytes / activeSeconds) : 0;
+            NSUInteger maliciousCount = maliciousByDay[date].count;
 
             [html appendFormat:@"<tr data-date=\"%@\" data-hosts=\"%lu\" data-connections=\"%lu\" data-rate=\"%llu\">"
-             "<td>%@</td><td>%@</td><td>%@</td><td>%lu</td><td>%lu</td><td>%@</td></tr>\n",
+             "<td>%@</td><td>%@</td><td>%@</td><td>%lu</td><td>%lu</td><td>%lu</td><td>%@</td></tr>\n",
              date,
              (unsigned long)hostCount,
              (unsigned long)maxConnections,
@@ -672,9 +698,52 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
              [self formattedRate:maxRate],
              (unsigned long)hostCount,
              (unsigned long)maxConnections,
+             (unsigned long)maliciousCount,
              [SNBByteFormatter stringFromBytes:totalBytes]];
         }
         [html appendString:@"</tbody></table>\n"];
+    }
+    [html appendString:@"</div>\n"];
+
+    [html appendString:@"<div class=\"card\">\n<h2>Malicious Connections</h2>\n"];
+    if (allMalicious.count == 0) {
+        [html appendString:@"<p class=\"muted\">No malicious connections detected.</p>\n"];
+    } else {
+        [html appendString:@"<table>\n"];
+        [html appendString:@"<tr><th>Date</th><th>Indicator</th><th>Connection</th><th>Score</th><th>Verdict</th><th>Confidence</th><th>Bytes</th><th>Packets</th><th>Providers</th><th>Explanation</th></tr>\n"];
+        for (NSDictionary *entry in allMalicious) {
+            NSString *date = entry[kStatsKeyDate] ?: @"";
+            NSString *indicator = entry[kMaliciousKeyIndicator] ?: @"";
+            NSString *source = entry[kConnectionKeySource] ?: @"";
+            NSString *destination = entry[kConnectionKeyDestination] ?: @"";
+            NSNumber *sourcePort = entry[kConnectionKeySourcePort] ?: @(0);
+            NSNumber *destinationPort = entry[kConnectionKeyDestinationPort] ?: @(0);
+            uint64_t bytes = [entry[kConnectionKeyBytes] unsignedLongLongValue];
+            uint64_t packets = [entry[kConnectionKeyPackets] unsignedLongLongValue];
+            TIEnrichmentResponse *response = entry[kMaliciousKeyResponse];
+            TIScoringResult *scoring = response.scoringResult;
+            NSInteger score = scoring ? scoring.finalScore : 0;
+            NSString *verdict = scoring ? [scoring verdictString] : @"";
+            NSString *confidence = scoring ? [NSString stringWithFormat:@"%.0f%%", scoring.confidence * 100.0] : @"";
+            NSString *explanation = scoring.explanation.length > 0 ? scoring.explanation : @"";
+            NSString *providersHtml = [self providerDetailsHTMLForResponse:response];
+            NSString *connectionLabel = [NSString stringWithFormat:@"%@:%ld -> %@:%ld",
+                                         source, (long)sourcePort.integerValue,
+                                         destination, (long)destinationPort.integerValue];
+            [html appendFormat:@"<tr><td>%@</td><td>%@</td><td>%@</td><td>%ld</td><td>%@</td><td>%@</td>"
+             "<td>%@</td><td>%llu</td><td>%@</td><td>%@</td></tr>\n",
+             date,
+             indicator,
+             connectionLabel,
+             (long)score,
+             verdict,
+             confidence,
+             [SNBByteFormatter stringFromBytes:bytes],
+             (unsigned long long)packets,
+             providersHtml,
+             explanation];
+        }
+        [html appendString:@"</table>\n"];
     }
     [html appendString:@"</div>\n"];
 
@@ -728,6 +797,45 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
                      address,
                      [SNBByteFormatter stringFromBytes:bytes],
                      (unsigned long long)packets];
+                }
+                [html appendString:@"</tbody></table>\n"];
+            }
+
+            NSArray<NSDictionary *> *malicious = maliciousByDay[date] ?: @[];
+            [html appendString:@"<h3 class=\"section-title\">Malicious Connections</h3>\n"];
+            if (malicious.count == 0) {
+                [html appendString:@"<p class=\"muted\">No malicious connections detected.</p>\n"];
+            } else {
+                [html appendString:@"<table><thead><tr><th>Indicator</th><th>Connection</th><th>Score</th><th>Verdict</th><th>Confidence</th><th>Bytes</th><th>Packets</th><th>Providers</th><th>Explanation</th></tr></thead><tbody>\n"];
+                for (NSDictionary *entry in malicious) {
+                    NSString *indicator = entry[kMaliciousKeyIndicator] ?: @"";
+                    NSString *source = entry[kConnectionKeySource] ?: @"";
+                    NSString *destination = entry[kConnectionKeyDestination] ?: @"";
+                    NSNumber *sourcePort = entry[kConnectionKeySourcePort] ?: @(0);
+                    NSNumber *destinationPort = entry[kConnectionKeyDestinationPort] ?: @(0);
+                    uint64_t bytes = [entry[kConnectionKeyBytes] unsignedLongLongValue];
+                    uint64_t packets = [entry[kConnectionKeyPackets] unsignedLongLongValue];
+                    TIEnrichmentResponse *response = entry[kMaliciousKeyResponse];
+                    TIScoringResult *scoring = response.scoringResult;
+                    NSInteger score = scoring ? scoring.finalScore : 0;
+                    NSString *verdict = scoring ? [scoring verdictString] : @"";
+                    NSString *confidence = scoring ? [NSString stringWithFormat:@"%.0f%%", scoring.confidence * 100.0] : @"";
+                    NSString *explanation = scoring.explanation.length > 0 ? scoring.explanation : @"";
+                    NSString *providersHtml = [self providerDetailsHTMLForResponse:response];
+                    NSString *connectionLabel = [NSString stringWithFormat:@"%@:%ld -> %@:%ld",
+                                                 source, (long)sourcePort.integerValue,
+                                                 destination, (long)destinationPort.integerValue];
+                    [html appendFormat:@"<tr><td>%@</td><td>%@</td><td>%ld</td><td>%@</td><td>%@</td>"
+                     "<td>%@</td><td>%llu</td><td>%@</td><td>%@</td></tr>\n",
+                     indicator,
+                     connectionLabel,
+                     (long)score,
+                     verdict,
+                     confidence,
+                     [SNBByteFormatter stringFromBytes:bytes],
+                     (unsigned long long)packets,
+                     providersHtml,
+                     explanation];
                 }
                 [html appendString:@"</tbody></table>\n"];
             }
@@ -921,6 +1029,143 @@ static NSString * const kConnectionKeyDestinationPort = @"destinationPort";
         sqlite3_finalize(stmt);
     }
     return connections;
+}
+
+- (TIEnrichmentResponse *)threatIntelResponseForIP:(NSString *)ip {
+    if (!self.threatIntelStore || ip.length == 0) {
+        return nil;
+    }
+    TIIndicator *indicator = [TIIndicator indicatorWithIP:ip];
+    if (!indicator) {
+        return nil;
+    }
+    return [self.threatIntelStore responseForIndicator:indicator];
+}
+
+- (NSDictionary *)maliciousEntryForConnection:(NSDictionary *)connection {
+    NSString *source = connection[kConnectionKeySource] ?: @"";
+    NSString *destination = connection[kConnectionKeyDestination] ?: @"";
+    if (source.length == 0 && destination.length == 0) {
+        return nil;
+    }
+
+    BOOL sourceLocal = [self isLocalAddress:source];
+    BOOL destinationLocal = [self isLocalAddress:destination];
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    if (sourceLocal && !destinationLocal) {
+        if (destination.length > 0) {
+            [candidates addObject:destination];
+        }
+        if (source.length > 0) {
+            [candidates addObject:source];
+        }
+    } else if (!sourceLocal && destinationLocal) {
+        if (source.length > 0) {
+            [candidates addObject:source];
+        }
+        if (destination.length > 0) {
+            [candidates addObject:destination];
+        }
+    } else {
+        if (destination.length > 0) {
+            [candidates addObject:destination];
+        }
+        if (source.length > 0 && ![source isEqualToString:destination]) {
+            [candidates addObject:source];
+        }
+    }
+
+    TIEnrichmentResponse *bestResponse = nil;
+    NSString *bestIndicator = nil;
+    NSInteger bestScore = 0;
+    for (NSString *candidate in candidates) {
+        TIEnrichmentResponse *response = [self threatIntelResponseForIP:candidate];
+        TIScoringResult *scoring = response.scoringResult;
+        if (!scoring || scoring.finalScore <= 0) {
+            continue;
+        }
+        if (!bestResponse || scoring.finalScore > bestScore) {
+            bestResponse = response;
+            bestIndicator = candidate;
+            bestScore = scoring.finalScore;
+        }
+    }
+
+    if (!bestResponse) {
+        return nil;
+    }
+    NSMutableDictionary *entry = [connection mutableCopy];
+    entry[kMaliciousKeyIndicator] = bestIndicator ?: @"";
+    entry[kMaliciousKeyResponse] = bestResponse;
+    entry[kMaliciousKeyScore] = @(bestScore);
+    return entry;
+}
+
+- (NSArray<NSDictionary *> *)maliciousConnectionsForDay:(NSString *)day {
+    NSArray<NSDictionary *> *connections = [self connectionsForDay:day];
+    if (connections.count == 0) {
+        return @[];
+    }
+    NSMutableArray<NSDictionary *> *malicious = [NSMutableArray array];
+    for (NSDictionary *connection in connections) {
+        NSDictionary *entry = [self maliciousEntryForConnection:connection];
+        if (entry) {
+            [malicious addObject:entry];
+        }
+    }
+    if (malicious.count == 0) {
+        return @[];
+    }
+    [malicious sortUsingComparator:^NSComparisonResult(NSDictionary *obj1, NSDictionary *obj2) {
+        NSInteger score1 = [obj1[kMaliciousKeyScore] integerValue];
+        NSInteger score2 = [obj2[kMaliciousKeyScore] integerValue];
+        if (score1 == score2) {
+            return NSOrderedSame;
+        }
+        return score1 > score2 ? NSOrderedAscending : NSOrderedDescending;
+    }];
+    return malicious;
+}
+
+- (NSString *)providerDetailsHTMLForResponse:(TIEnrichmentResponse *)response {
+    if (!response || response.providerResults.count == 0) {
+        return @"<span class=\"muted\">None</span>";
+    }
+    NSMutableString *html = [NSMutableString stringWithString:@"<ul>"];
+    for (TIResult *result in response.providerResults) {
+        NSString *provider = result.providerName ?: @"";
+        NSMutableArray<NSString *> *parts = [NSMutableArray array];
+        if (result.verdict) {
+            NSString *hit = result.verdict.hit ? @"hit" : @"no hit";
+            [parts addObject:hit];
+            if (result.verdict.confidence > 0) {
+                [parts addObject:[NSString stringWithFormat:@"confidence %ld%%", (long)result.verdict.confidence]];
+            }
+            if (result.verdict.categories.count > 0) {
+                [parts addObject:[NSString stringWithFormat:@"categories: %@",
+                                  [result.verdict.categories componentsJoinedByString:@", "]]];
+            }
+            if (result.verdict.tags.count > 0) {
+                [parts addObject:[NSString stringWithFormat:@"tags: %@",
+                                  [result.verdict.tags componentsJoinedByString:@", "]]];
+            }
+            if (result.verdict.lastSeen) {
+                [parts addObject:[NSString stringWithFormat:@"last seen: %@",
+                                  [self formattedDateTime:result.verdict.lastSeen]]];
+            }
+        }
+        if (result.metadata.sourceURL.length > 0) {
+            [parts addObject:[NSString stringWithFormat:@"source: %@", result.metadata.sourceURL]];
+        }
+        NSString *detail = parts.count > 0 ? [parts componentsJoinedByString:@"; "] : @"";
+        if (detail.length > 0) {
+            [html appendFormat:@"<li>%@ - %@</li>", provider, detail];
+        } else {
+            [html appendFormat:@"<li>%@</li>", provider];
+        }
+    }
+    [html appendString:@"</ul>"];
+    return html;
 }
 
 - (NSDictionary *)weeklySummaryFromRecords:(NSArray<NSDictionary *> *)records {
