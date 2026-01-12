@@ -34,6 +34,14 @@
 @property (nonatomic, assign) BOOL showLowSeverityThreats;
 @property (nonatomic, assign) BOOL showHistoricalThreats;
 
+// Main section collapse/expand state
+@property (nonatomic, assign) BOOL sectionThreatsExpanded;
+@property (nonatomic, assign) BOOL sectionNetworkActivityExpanded;
+@property (nonatomic, assign) BOOL sectionNetworkDevicesExpanded;
+@property (nonatomic, assign) BOOL sectionTopHostsExpanded;
+@property (nonatomic, assign) BOOL sectionTopConnectionsExpanded;
+@property (nonatomic, assign) BOOL sectionNetworkAssetsExpanded;
+
 - (instancetype)initWithMenu:(NSMenu *)menu
                   statusItem:(NSStatusItem *)statusItem
                configuration:(ConfigurationManager *)configuration;
@@ -67,5 +75,13 @@
 - (void)toggleShowProviderDetails;
 - (void)toggleShowLowSeverityThreats;
 - (void)toggleShowHistoricalThreats;
+
+// Main section toggles
+- (void)toggleSectionThreats;
+- (void)toggleSectionNetworkActivity;
+- (void)toggleSectionNetworkDevices;
+- (void)toggleSectionTopHosts;
+- (void)toggleSectionTopConnections;
+- (void)toggleSectionNetworkAssets;
 
 @end

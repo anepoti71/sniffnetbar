@@ -17,3 +17,11 @@ SNBUserDefaultsKey const SNBUserDefaultsKeyKnownNetworkDevices = @"KnownNetworkD
 SNBUserDefaultsKey const SNBUserDefaultsKeyShowTopHosts = @"ShowTopHosts";
 SNBUserDefaultsKey const SNBUserDefaultsKeyShowTopConnections = @"ShowTopConnections";
 SNBUserDefaultsKey const SNBUserDefaultsKeyShowMap = @"ShowMap";
+
+// Section collapse/expand states
+SNBUserDefaultsKey const SNBUserDefaultsKeySectionThreatsExpanded = @"SectionThreatsExpanded";
+SNBUserDefaultsKey const SNBUserDefaultsKeySectionNetworkActivityExpanded = @"SectionNetworkActivityExpanded";
+SNBUserDefaultsKey const SNBUserDefaultsKeySectionNetworkDevicesExpanded = @"SectionNetworkDevicesExpanded";
+SNBUserDefaultsKey const SNBUserDefaultsKeySectionTopHostsExpanded = @"SectionTopHostsExpanded";
+SNBUserDefaultsKey const SNBUserDefaultsKeySectionTopConnectionsExpanded = @"SectionTopConnectionsExpanded";
+SNBUserDefaultsKey const SNBUserDefaultsKeySectionNetworkAssetsExpanded = @"SectionNetworkAssetsExpanded";
