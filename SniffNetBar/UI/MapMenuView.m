@@ -11,6 +11,7 @@
 #import "ExpiringCache.h"
 #import "IPAddressUtilities.h"
 #import "UserDefaultsKeys.h"
+#import "SNBLocationStore.h"
 #import "Logger.h"
 #import <WebKit/WebKit.h>
 #import <CoreLocation/CoreLocation.h>
@@ -20,6 +21,7 @@
 @property (nonatomic, strong) NSButton *zoomInButton;
 @property (nonatomic, strong) NSButton *zoomOutButton;
 @property (nonatomic, strong) SNBExpiringCache<NSString *, NSDictionary *> *locationCache;
+@property (nonatomic, strong) SNBLocationStore *locationStore;
 @property (nonatomic, strong) NSMutableSet<NSString *> *inFlightLookups;
 @property (nonatomic, strong) NSMutableSet<NSString *> *failedLookups;
 @property (nonatomic, strong) NSURLSession *session;
@@ -37,6 +39,21 @@
 @end
 
 @implementation MapMenuView
+
+static NSString *SNBLocationStoreDirectory(void) {
+    NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);
+    if (paths.count == 0) {
+        return NSTemporaryDirectory();
+    }
+    NSString *dir = [paths.firstObject stringByAppendingPathComponent:@"SniffNetBar"];
+    NSError *error = nil;
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:&error];
+    if (error) {
+        SNBLogUIDebug("Unable to create App Support dir: %{public}@", error.localizedDescription);
+        return NSTemporaryDirectory();
+    }
+    return dir;
+}
 
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
@@ -77,6 +94,11 @@
         NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProvider];
         NSString *defaultProvider = [ConfigurationManager sharedManager].defaultMapProvider;
         _providerName = savedProvider.length > 0 ? savedProvider : defaultProvider;
+
+        NSString *supportDir = SNBLocationStoreDirectory();
+        NSString *dbPath = [supportDir stringByAppendingPathComponent:@"location_cache.sqlite"];
+        _locationStore = [[SNBLocationStore alloc] initWithPath:dbPath
+                                            expirationInterval:[ConfigurationManager sharedManager].locationCacheExpirationTime];
 
         [self loadMapHTML];
         [self updateLayout];
@@ -135,6 +157,7 @@
     if (!self.lastCacheCleanupTime || [now timeIntervalSinceDate:self.lastCacheCleanupTime] > 5.0) {
         self.lastCacheCleanupTime = now;
         NSUInteger expiredCount = [self.locationCache cleanupAndReturnExpiredCount];
+        [self.locationStore cleanupExpiredEntries];
         if (expiredCount > 0) {
             SNBLogUIDebug(": cleaned up %lu expired location cache entries",
                    (unsigned long)expiredCount);
@@ -178,7 +201,14 @@
     }
     
     for (NSString *ip in targetIps) {
-        if ([self.locationCache objectForKey:ip]) {
+        NSDictionary *cached = [self.locationCache objectForKey:ip];
+        if (!cached) {
+            cached = [self.locationStore locationForIP:ip];
+            if (cached) {
+                [self.locationCache setObject:cached forKey:ip];
+            }
+        }
+        if (cached) {
             continue;
         }
         if (!canLookup || [self.inFlightLookups containsObject:ip] || [self.failedLookups containsObject:ip]) {
@@ -632,6 +662,7 @@
             }
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self.locationCache setObject:payload forKey:ip];
+                [self.locationStore storeLocation:payload forIP:ip];
                 completion(CLLocationCoordinate2DMake(lat, lon), YES);
             });
         } else {
