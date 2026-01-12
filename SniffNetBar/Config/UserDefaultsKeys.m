@@ -14,3 +14,6 @@ SNBUserDefaultsKey const SNBUserDefaultsKeyThreatIntelEnabled = @"ThreatIntelEna
 SNBUserDefaultsKey const SNBUserDefaultsKeyAssetMonitorEnabled = @"AssetMonitorEnabled";
 SNBUserDefaultsKey const SNBUserDefaultsKeyDailyStatisticsEnabled = @"DailyStatisticsEnabled";
 SNBUserDefaultsKey const SNBUserDefaultsKeyKnownNetworkDevices = @"KnownNetworkDevices";
+SNBUserDefaultsKey const SNBUserDefaultsKeyShowTopHosts = @"ShowTopHosts";
+SNBUserDefaultsKey const SNBUserDefaultsKeyShowTopConnections = @"ShowTopConnections";
+SNBUserDefaultsKey const SNBUserDefaultsKeyShowMap = @"ShowMap";

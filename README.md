@@ -42,6 +42,17 @@ make
 
 This creates `build/SniffNetBar.app`.
 
+## Compilation
+
+1. **Prepare the environment** – install Xcode command line tools (`xcode-select --install`) and `libpcap` (`brew install libpcap`). The Makefile (`SniffNetBar/Makefile`) assumes Homebrew puts headers in `/opt/homebrew` or `/usr/local`, so adjust `PCAP_INCLUDE` and `PCAP_LIBDIR` if that differs.
+2. **Configure signing** – the privileged helper must be signed with the same identity as the main app. Export your certificate into `CODESIGN_IDENTITY` before running `make`, for example `CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" make`. To keep builds repeatable, copy your identity name into `SniffNetBar/Makefile.local` and set `CODESIGN_IDENTITY = Apple Development: Your Name (TEAMID)` there.
+3. **Build from scratch** – clean stale artifacts (`make clean`) and build with `make` or `CODESIGN_IDENTITY="…" make`. The default target compiles the app, helper, scripts, and CLI utilities while signing both bundles and updating the helper plist if a code signature is present.
+4. **Optional tooling** – the target also builds helpers such as `register_helper`, `status_helper`, `set_apikey`, etc., which are copied into the bundle for installation/registration later.
+
+## Certificate constraints
+
+The helper explicitly validates the connecting app’s bundle and team identifiers (`SniffNetBarHelper/SNBPrivilegedHelperService.m:120-235`). It caches its own `teamIdentifier` (via `SNBTeamIdentifierForSelf`) and returns `NO` from `validateConnection:` whenever `kSecCodeInfoTeamIdentifier` is missing or does not match (`SniffNetBarHelper/SNBPrivilegedHelperService.m:224-235`). Self-signed identities lack an Apple-issued team ID, so the helper refuses their connections; only Apple Development/Developer ID certificates that embed the same team ID for both app and helper can run SniffNetBar end-to-end.
+
 ## Install
 
 ```bash

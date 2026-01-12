@@ -33,6 +33,7 @@
 @property (nonatomic, assign) NSUInteger renderGeneration;
 @property (nonatomic, strong) NSDate *lastCacheCleanupTime;
 @property (nonatomic, strong) dispatch_semaphore_t geoLocationSemaphore;
+@property (nonatomic, assign, readwrite) NSUInteger drawnConnectionCount;
 @end
 
 @implementation MapMenuView
@@ -373,6 +374,10 @@
                                @"title": lineTitle}];
         }
         SNBLogUIDebug(": created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)connections.count);
+
+        // Update the count of actually drawn connections for display synchronization
+        strongSelf.drawnConnectionCount = lines.count;
+
         if (lines.count > 0) {
             SNBLogUIDebug(": First line example: %{public}@", lines[0]);
         }

@@ -13,6 +13,7 @@
 #import "TrafficStatistics.h"
 #import "UserDefaultsKeys.h"
 #import "NetworkAssetMonitor.h"
+#import "IPAddressUtilities.h"
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 #import "Logger.h"
@@ -119,10 +120,6 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         _statusMenu = menu;
         _statusItem = statusItem;
         _configuration = configuration;
-        _showTopHosts = YES;
-        _showTopConnections = YES;
-        _showMap = NO;
-        _dailyStatsEnabled = YES;
         _statsReportAvailable = NO;
         _cachedMenuItems = [NSMutableDictionary dictionary];
         _menuStructureBuilt = NO;
@@ -132,11 +129,71 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         _showAllAssets = NO;
         _showProviderDetails = NO;
 
-        NSString *savedProvider = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProvider];
+        // Load persisted settings from NSUserDefaults
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+        // Load visualization settings (default: YES for top hosts/connections, NO for map)
+        if ([defaults objectForKey:SNBUserDefaultsKeyShowTopHosts]) {
+            _showTopHosts = [defaults boolForKey:SNBUserDefaultsKeyShowTopHosts];
+        } else {
+            _showTopHosts = YES;
+        }
+
+        if ([defaults objectForKey:SNBUserDefaultsKeyShowTopConnections]) {
+            _showTopConnections = [defaults boolForKey:SNBUserDefaultsKeyShowTopConnections];
+        } else {
+            _showTopConnections = YES;
+        }
+
+        if ([defaults objectForKey:SNBUserDefaultsKeyShowMap]) {
+            _showMap = [defaults boolForKey:SNBUserDefaultsKeyShowMap];
+        } else {
+            _showMap = NO;
+        }
+
+        if ([defaults objectForKey:SNBUserDefaultsKeyDailyStatisticsEnabled]) {
+            _dailyStatsEnabled = [defaults boolForKey:SNBUserDefaultsKeyDailyStatisticsEnabled];
+        } else {
+            _dailyStatsEnabled = YES;
+        }
+
+        NSString *savedProvider = [defaults stringForKey:SNBUserDefaultsKeyMapProvider];
         _mapProviderName = savedProvider.length > 0 ? savedProvider : configuration.defaultMapProvider;
     }
     return self;
 }
+
+#pragma mark - Property Setters with Persistence
+
+- (void)setShowTopHosts:(BOOL)showTopHosts {
+    if (_showTopHosts != showTopHosts) {
+        _showTopHosts = showTopHosts;
+        [[NSUserDefaults standardUserDefaults] setBool:showTopHosts forKey:SNBUserDefaultsKeyShowTopHosts];
+    }
+}
+
+- (void)setShowTopConnections:(BOOL)showTopConnections {
+    if (_showTopConnections != showTopConnections) {
+        _showTopConnections = showTopConnections;
+        [[NSUserDefaults standardUserDefaults] setBool:showTopConnections forKey:SNBUserDefaultsKeyShowTopConnections];
+    }
+}
+
+- (void)setShowMap:(BOOL)showMap {
+    if (_showMap != showMap) {
+        _showMap = showMap;
+        [[NSUserDefaults standardUserDefaults] setBool:showMap forKey:SNBUserDefaultsKeyShowMap];
+    }
+}
+
+- (void)setDailyStatsEnabled:(BOOL)dailyStatsEnabled {
+    if (_dailyStatsEnabled != dailyStatsEnabled) {
+        _dailyStatsEnabled = dailyStatsEnabled;
+        [[NSUserDefaults standardUserDefaults] setBool:dailyStatsEnabled forKey:SNBUserDefaultsKeyDailyStatisticsEnabled];
+    }
+}
+
+#pragma mark - Helper Methods
 
 - (NSString *)truncatedMenuTitle:(NSString *)title maxWidth:(CGFloat)maxWidth {
     if (title.length == 0 || maxWidth <= 0) {
@@ -227,17 +284,21 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         return @[];
     }
 
-    // Ensure map shows connections to all unique destination IPs (matching topHosts)
-    // Select one representative connection per destination IP to visualize all active hosts
-    NSMutableDictionary<NSString *, ConnectionTraffic *> *uniqueDestinations = [NSMutableDictionary dictionary];
+    // Deduplicate connections by destination IP and filter to public IPs only
+    // Map visualization only shows connections to public (geolocatable) IPs
+    // This count matches what's actually displayed on the map
+    NSMutableDictionary<NSString *, ConnectionTraffic *> *uniquePublicDestinations = [NSMutableDictionary dictionary];
     for (ConnectionTraffic *conn in allConnections) {
-        if (!uniqueDestinations[conn.destinationAddress]) {
-            uniqueDestinations[conn.destinationAddress] = conn;
+        NSString *destIP = conn.destinationAddress;
+        if (destIP.length > 0 && [IPAddressUtilities isPublicIPAddress:destIP]) {
+            if (!uniquePublicDestinations[destIP]) {
+                uniquePublicDestinations[destIP] = conn;
+            }
         }
     }
 
-    // Return connections representing all unique destination IPs
-    return [uniqueDestinations allValues];
+    // Return deduplicated public connections (matching map display)
+    return [uniquePublicDestinations allValues];
 }
 
 #pragma mark - Threat Sorting Helpers
@@ -1100,10 +1161,18 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     NSString *totalBytesStr = [SNBByteFormatter stringFromBytes:stats.totalBytes];
     [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Total" value:totalBytesStr color:[NSColor labelColor]]];
 
-    // Active connection counts
-    NSString *activeConnsStr = [NSString stringWithFormat:@"%lu", (unsigned long)stats.topConnections.count];
-    [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Connections" value:activeConnsStr
+    // Active connection counts - show both total and geolocated on same line
+    NSArray<ConnectionTraffic *> *mapConnections = [self connectionsForMapFromStats:stats];
+    NSUInteger totalPublicConnections = mapConnections.count;
+    NSUInteger geolocatedConnections = self.mapMenuView ? self.mapMenuView.drawnConnectionCount : 0;
+
+    // Combine connections and geolocated on one line: "Connections  8  (6 Geolocated)"
+    NSString *connectionsValue = [NSString stringWithFormat:@"%lu  (%lu Geolocated)",
+                                  (unsigned long)totalPublicConnections,
+                                  (unsigned long)geolocatedConnections];
+    [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Connections" value:connectionsValue
                                                          color:[NSColor secondaryLabelColor]]];
+
     NSString *hostsStr = [NSString stringWithFormat:@"%lu", (unsigned long)stats.topHosts.count];
     [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Hosts" value:hostsStr
                                                          color:[NSColor secondaryLabelColor]]];

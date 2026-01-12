@@ -11,6 +11,7 @@
 @interface MapMenuView : NSView
 
 @property (nonatomic, copy) NSString *providerName;
+@property (nonatomic, assign, readonly) NSUInteger drawnConnectionCount;
 
 - (void)updateWithConnections:(NSArray<ConnectionTraffic *> *)connections;
 
