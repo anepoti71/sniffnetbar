@@ -530,7 +530,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     item.enabled = YES;
 
     NSFont *font = [NSFont boldSystemFontOfSize:13.0];
-    NSColor *color = [NSColor labelColor];
+    NSColor *color = [NSColor secondaryLabelColor];
 
     NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:fullTitle];
     [attrString addAttribute:NSFontAttributeName value:font range:NSMakeRange(0, fullTitle.length)];
@@ -753,12 +753,12 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     [settingsSubmenu addItem:providerItem];
     [settingsSubmenu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem *toggleHosts = [[NSMenuItem alloc] initWithTitle:@"Show Top Hosts"
+    NSMenuItem *toggleHosts = [[NSMenuItem alloc] initWithTitle:@"Show Top Hosts by Traffic"
                                                          action:@selector(toggleShowTopHosts:)
                                                   keyEquivalent:@""];
     toggleHosts.target = target;
     toggleHosts.state = self.showTopHosts ? NSControlStateValueOn : NSControlStateValueOff;
-    NSMenuItem *toggleConnections = [[NSMenuItem alloc] initWithTitle:@"Show Top Connections"
+    NSMenuItem *toggleConnections = [[NSMenuItem alloc] initWithTitle:@"Show Top Connections by Traffic"
                                                                action:@selector(toggleShowTopConnections:)
                                                         keyEquivalent:@""];
     toggleConnections.target = target;
@@ -1285,7 +1285,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         NSString *connectionsValue = [NSString stringWithFormat:@"%lu  (%lu Geolocated)",
                                       (unsigned long)totalPublicConnections,
                                       (unsigned long)geolocatedConnections];
-        [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Connections" value:connectionsValue
+        [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Active Connections" value:connectionsValue
                                                              color:[NSColor secondaryLabelColor]]];
 
         NSString *hostsStr = [NSString stringWithFormat:@"%lu", (unsigned long)stats.topHosts.count];
@@ -1457,7 +1457,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     if (self.showTopHosts && stats.topHosts.count > 0) {
         [detailsSubmenu addItem:[NSMenuItem separatorItem]];
-        [detailsSubmenu addItem:[self collapsibleSectionHeaderWithTitle:@"TOP HOSTS"
+        [detailsSubmenu addItem:[self collapsibleSectionHeaderWithTitle:@"TOP HOSTS by Traffic"
                                                                 expanded:self.sectionTopHostsExpanded
                                                                   action:@selector(toggleSectionTopHosts)
                                                                   target:self]];
@@ -1480,7 +1480,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     if (self.showTopConnections && stats.topConnections.count > 0) {
         [detailsSubmenu addItem:[NSMenuItem separatorItem]];
-        [detailsSubmenu addItem:[self collapsibleSectionHeaderWithTitle:@"TOP CONNECTIONS"
+        [detailsSubmenu addItem:[self collapsibleSectionHeaderWithTitle:@"TOP CONNECTIONS by Traffic"
                                                                 expanded:self.sectionTopConnectionsExpanded
                                                                   action:@selector(toggleSectionTopConnections)
                                                                   target:self]];
