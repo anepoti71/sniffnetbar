@@ -317,6 +317,8 @@
             NSString *locationPart = name.length > 0 ? [NSString stringWithFormat:@"%@ — %@", ip, name] : ip;
             NSString *title = isp.length > 0 ? [NSString stringWithFormat:@"%@\nISP: %@", locationPart, isp] : locationPart;
             [points addObject:@{@"lat": @(coord.latitude), @"lon": @(coord.longitude), @"title": title}];
+            SNBLogUIDebug("Map marker: %{public}@ (%f, %f) %@",
+                          ip, coord.latitude, coord.longitude, name ?: @"");
         }
 
         CLLocationCoordinate2D publicCoord = kCLLocationCoordinate2DInvalid;
@@ -372,11 +374,20 @@
                                @"dstLat": @(dstCoord.latitude),
                                @"dstLon": @(dstCoord.longitude),
                                @"title": lineTitle}];
+            SNBLogUIDebug("Map line: %@.%ld (%@) -> %@.%ld (%@)",
+                          connection.sourceAddress,
+                          connection.sourcePort,
+                          [SNBByteFormatter stringFromBytes:connection.bytes],
+                          connection.destinationAddress,
+                          connection.destinationPort,
+                          [NSString stringWithFormat:@"src(%f,%f) dst(%f,%f)",
+                             srcCoord.latitude, srcCoord.longitude, dstCoord.latitude, dstCoord.longitude]);
         }
         SNBLogUIDebug(": created %lu connection lines from %lu connections", (unsigned long)lines.count, (unsigned long)connections.count);
 
         // Update the count of actually drawn connections for display synchronization
         strongSelf.drawnConnectionCount = lines.count;
+        SNBLogUIDebug("Map draw count=%lu (capped at %ld lines)", (unsigned long)lines.count, (long)maxLines);
 
         if (lines.count > 0) {
             SNBLogUIDebug(": First line example: %{public}@", lines[0]);

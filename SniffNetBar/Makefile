@@ -24,7 +24,7 @@ PCAP_LIBS = -lpcap
 SQLITE_LIBS = -lsqlite3
 CC = clang
 CFLAGS = -std=c11 -Wall -Wextra -O2
-OBJCFLAGS = -fobjc-arc -fobjc-weak -std=gnu11 -Wall -Wextra -O2
+OBJCFLAGS = -fobjc-arc -fobjc-weak -std=gnu11 -Wall -Wextra -O2 -DSNB_LOG_LEVEL_MINIMUM=SNBLogLevelDebug
 
 # Find macOS SDK
 SDKROOT = $(shell xcrun --show-sdk-path 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk)
@@ -232,6 +232,7 @@ $(BUILD_DIR)/status_helper: Tools/status_helper.m $(BUILD_DIR)/Utils/SMAppServic
 
 clean:
 	rm -rf $(BUILD_DIR)
+	rm -rf $(INSTALL_APP)
 
 install: $(APP_BUNDLE) tools
 	@echo "Installing $(APP_NAME)..."

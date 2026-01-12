@@ -55,6 +55,7 @@ static NSString *SNBStoredDeviceName(void) {
 @property (nonatomic, assign) NSUInteger lastTopHostsCount;
 @property (nonatomic, assign) NSUInteger lastTopConnectionsCount;
 @property (nonatomic, assign) CFAbsoluteTime lastVisualizationRefreshTime;
+@property (nonatomic, assign) NSUInteger lastGeolocatedConnectionCount;
 
 // Performance: Cache menu items to avoid recreation
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSMenuItem *> *cachedMenuItems;
@@ -896,6 +897,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         self.mapMenuItem.view = nil;
         self.mapMenuItem = nil;
         self.mapMenuView = nil;
+        self.lastGeolocatedConnectionCount = 0;
         SNBLogUIDebug("Map menu view released");
     }
 }
@@ -999,6 +1001,10 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     NSMenu *visualizationSubmenu = self.visualizationSubmenu;
     if (!visualizationSubmenu) {
         return;
+    }
+
+    if (self.showMap && self.menuIsOpen) {
+        [self mapMenuItemIfNeeded];
     }
 
     [visualizationSubmenu removeAllItems];
@@ -1287,8 +1293,12 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         // Update map with current connections to ensure drawnConnectionCount is current
         if (self.showMap && self.mapMenuView) {
             [self.mapMenuView updateWithConnections:mapConnections];
+            self.lastGeolocatedConnectionCount = self.mapMenuView.drawnConnectionCount;
         }
-        NSUInteger geolocatedConnections = self.mapMenuView ? self.mapMenuView.drawnConnectionCount : 0;
+        if (mapConnections.count == 0) {
+            self.lastGeolocatedConnectionCount = 0;
+        }
+        NSUInteger geolocatedConnections = MIN(self.lastGeolocatedConnectionCount, totalPublicConnections);
 
         // Combine connections and geolocated on one line: "Connections  8  (6 Geolocated)"
         NSString *connectionsValue = [NSString stringWithFormat:@"%lu  (%lu Geolocated)",

@@ -147,14 +147,15 @@
             return;
         }
         NSTimeInterval pollingInterval = strongSelf.configuration.packetPollingInterval;
-        strongSelf.pollingTimer = [NSTimer scheduledTimerWithTimeInterval:pollingInterval
-                                                            repeats:YES
-                                                              block:^(NSTimer *timer) {
+        strongSelf.pollingTimer = [NSTimer timerWithTimeInterval:pollingInterval
+                                                        repeats:YES
+                                                          block:^(NSTimer *timer) {
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (strongSelf) {
                 [strongSelf pollNextPacket];
             }
         }];
+        [[NSRunLoop mainRunLoop] addTimer:strongSelf.pollingTimer forMode:NSRunLoopCommonModes];
     });
 }
 

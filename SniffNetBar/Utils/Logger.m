@@ -48,15 +48,12 @@ SNBLogLevel SNBGetRuntimeLogLevel(void) {
     // Get debug logging flag from configuration
     BOOL debugLogging = [ConfigurationManager sharedManager].debugLogging;
 
-    #ifdef DEBUG
-        // DEBUG builds: respect debugLogging flag
-        SNBLogLevel level = debugLogging ? SNBLogLevelDebug : SNBLogLevelInfo;
-        isResolving = NO;
-        return level;
-    #else
-        // RELEASE builds: more restrictive
-        SNBLogLevel level = debugLogging ? SNBLogLevelInfo : SNBLogLevelWarn;
-        isResolving = NO;
-        return level;
-    #endif
+#ifdef DEBUG
+    SNBLogLevel level = debugLogging ? SNBLogLevelDebug : SNBLogLevelInfo;
+#else
+    // RELEASE builds now allow opt-in debug logging when the flag is set
+    SNBLogLevel level = debugLogging ? SNBLogLevelDebug : SNBLogLevelWarn;
+#endif
+    isResolving = NO;
+    return level;
 }
