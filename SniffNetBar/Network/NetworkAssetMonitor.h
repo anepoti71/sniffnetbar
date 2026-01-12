@@ -25,6 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign, getter=isEnabled) BOOL enabled;
 @property (nonatomic, copy) void (^onAssetsUpdated)(NSArray<SNBNetworkAsset *> *assets,
                                                     NSArray<SNBNetworkAsset *> *newAssets);
+@property (nonatomic, copy, nullable) NSString *interfaceName;
 
 - (void)start;
 - (void)stop;

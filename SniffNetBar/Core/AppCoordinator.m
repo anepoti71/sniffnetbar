@@ -86,6 +86,9 @@
     [self.deviceManager loadAvailableDevices];
     [self.deviceManager restoreSelectedDevice];
 
+    // Keep the asset monitor aligned with the selected capture interface
+    self.assetMonitor.interfaceName = self.deviceManager.selectedDevice.name;
+
     // Update menu after devices are loaded
     [self updateMenu];
 
@@ -160,6 +163,7 @@
 
 - (void)selectDevice:(NetworkDevice *)device {
     NSError *error = nil;
+    self.assetMonitor.interfaceName = device.name;
     BOOL changed = [self.deviceManager selectDevice:device error:&error];
     if (changed) {
         [self.statistics reset];

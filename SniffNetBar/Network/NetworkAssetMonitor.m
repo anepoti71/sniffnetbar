@@ -33,6 +33,28 @@ static const NSTimeInterval kRecentNewAssetTTL = 300.0; // 5 minutes
 @end
 
 @implementation SNBNetworkAssetMonitor
+@synthesize interfaceName = _interfaceName;
+
+- (void)setInterfaceName:(NSString *)interfaceName {
+    if ([_interfaceName isEqualToString:interfaceName]) {
+        return;
+    }
+    _interfaceName = [interfaceName copy];
+    [self resetStateForInterfaceChange];
+    if (self.enabled) {
+        [self refresh];
+    }
+}
+
+- (void)resetStateForInterfaceChange {
+    [self.assetsByMAC removeAllObjects];
+    [self.recentNewAssets removeAllObjects];
+    [self.knownMACs removeAllObjects];
+    self.shouldSeedKnown = YES;
+    self.assetsSnapshotCache = @[];
+    self.recentNewAssetsSnapshotCache = @[];
+}
+
 
 - (instancetype)init {
     self = [super init];
@@ -176,7 +198,12 @@ static const NSTimeInterval kRecentNewAssetTTL = 300.0; // 5 minutes
 - (NSArray<SNBNetworkAsset *> *)loadAssetsFromARP {
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = @"/usr/sbin/arp";
-    task.arguments = @[@"-a"];
+    NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:@"-a"];
+    if (self.interfaceName.length > 0) {
+        [arguments addObject:@"-i"];
+        [arguments addObject:self.interfaceName];
+    }
+    task.arguments = arguments;
 
     NSPipe *pipe = [NSPipe pipe];
     task.standardOutput = pipe;

@@ -62,6 +62,7 @@ static NSString *SNBStoredDeviceName(void) {
 @property (nonatomic, assign) NSUInteger lastDeviceCount;
 @property (nonatomic, assign) BOOL lastThreatIntelEnabled;
 @property (nonatomic, assign) BOOL lastAssetMonitorEnabled;
+@property (nonatomic, copy) NSString *selectedDeviceDisplayName;
 
 // Helper method for provider summary (used by category)
 - (NSString *)providerSummaryForResponse:(TIEnrichmentResponse *)response;
@@ -712,6 +713,14 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     NSMenuItem *deviceMenu = [[NSMenuItem alloc] initWithTitle:@"Network Interface" action:nil keyEquivalent:@""];
     NSMenu *deviceSubmenu = [[NSMenu alloc] init];
     NSString *uiSelectedDeviceName = selectedDevice.name ?: SNBStoredDeviceName();
+    NSString *selectedInterfaceTitle = nil;
+    if (selectedDevice) {
+        selectedInterfaceTitle = selectedDevice.displayName ?: selectedDevice.name;
+    }
+    if (selectedInterfaceTitle.length == 0) {
+        selectedInterfaceTitle = SNBStoredDeviceName();
+    }
+    self.selectedDeviceDisplayName = selectedInterfaceTitle;
     NSArray<NetworkDevice *> *deviceList = devices ?: @[];
 
     SNBLogUIDebug("Building device menu: selectedDevice=%s, storedDevice=%s, uiSelectedDeviceName=%s",
@@ -1507,7 +1516,11 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     if (assetMonitorEnabled && networkAssets.count > 0) {
         [detailsSubmenu addItem:[NSMenuItem separatorItem]];
-        [detailsSubmenu addItem:[self collapsibleSectionHeaderWithTitle:@"NETWORK ASSETS"
+        NSString *networkDevicesTitle = @"NETWORK DEVICES";
+        if (self.selectedDeviceDisplayName.length > 0) {
+            networkDevicesTitle = [NSString stringWithFormat:@"NETWORK DEVICES (%@)", self.selectedDeviceDisplayName];
+        }
+        [detailsSubmenu addItem:[self collapsibleSectionHeaderWithTitle:networkDevicesTitle
                                                                 expanded:self.sectionNetworkAssetsExpanded
                                                                   action:@selector(toggleSectionNetworkAssets)
                                                                   target:self]];
