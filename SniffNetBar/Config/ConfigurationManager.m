@@ -13,6 +13,7 @@
 NSString * const kVirusTotalAPIKeyIdentifier = @"VirusTotalAPIKey";
 NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
 NSString * const kGreyNoiseAPIKeyIdentifier = @"GreyNoiseAPIKey";
+NSString * const kIpInfoAPITokenIdentifier = @"IpInfoAPIToken";
 
 @interface ConfigurationManager ()
 @property (nonatomic, strong) NSDictionary *configuration;
@@ -316,6 +317,26 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
 - (NSUInteger)geoLocationSemaphoreLimit {
     NSNumber *value = self.configuration[@"GeoLocationSemaphoreLimit"];
     return value ? [value unsignedIntegerValue] : 5;
+}
+
+- (NSString *)ipInfoAPIToken {
+    NSError *error = nil;
+    NSString *keychainKey = [KeychainManager getAPIKeyForIdentifier:kIpInfoAPITokenIdentifier
+                                                              error:&error];
+    if (keychainKey.length > 0) {
+        return keychainKey;
+    }
+
+    NSString *plistKey = self.configuration[@"IpInfoAPIToken"];
+    if (plistKey.length > 0 && ![plistKey isEqualToString:@"YOUR_IPINFO_API_TOKEN_HERE"]) {
+        [KeychainManager saveAPIKey:plistKey
+                      forIdentifier:kIpInfoAPITokenIdentifier
+                              error:nil];
+        SNBLogConfigInfo("Migrated ipinfo token to keychain");
+        return plistKey;
+    }
+
+    return @"";
 }
 
 #pragma mark - Threat Intelligence Configuration

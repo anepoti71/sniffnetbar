@@ -12,6 +12,7 @@
 extern NSString * const kVirusTotalAPIKeyIdentifier;
 extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 extern NSString * const kGreyNoiseAPIKeyIdentifier;
+extern NSString * const kIpInfoAPITokenIdentifier;
 
 void printUsage(const char *progName) {
     printf("Usage: %s <provider>\n", progName);
@@ -19,6 +20,7 @@ void printUsage(const char *progName) {
     printf("  virustotal    Remove VirusTotal API key\n");
     printf("  abuseipdb     Remove AbuseIPDB API key\n");
     printf("  greynoise     Remove GreyNoise API key\n");
+    printf("  ipinfo        Remove ipinfo.io API token\n");
     printf("  all           Remove all API keys\n");
     printf("\nExamples:\n");
     printf("  %s virustotal\n", progName);
@@ -45,11 +47,13 @@ int main(int argc, const char * argv[]) {
             identifiers = @[kAbuseIPDBAPIKeyIdentifier];
         } else if ([provider isEqualToString:@"greynoise"]) {
             identifiers = @[kGreyNoiseAPIKeyIdentifier];
+        } else if ([provider isEqualToString:@"ipinfo"]) {
+            identifiers = @[kIpInfoAPITokenIdentifier];
         } else if ([provider isEqualToString:@"all"]) {
-            identifiers = @[kVirusTotalAPIKeyIdentifier, kAbuseIPDBAPIKeyIdentifier, kGreyNoiseAPIKeyIdentifier];
+            identifiers = @[kVirusTotalAPIKeyIdentifier, kAbuseIPDBAPIKeyIdentifier, kGreyNoiseAPIKeyIdentifier, kIpInfoAPITokenIdentifier];
         } else {
             printf("Error: Unknown provider '%s'\n", [provider UTF8String]);
-            printf("Valid providers: virustotal, abuseipdb, greynoise, all\n");
+            printf("Valid providers: virustotal, abuseipdb, greynoise, ipinfo, all\n");
             return 1;
         }
 

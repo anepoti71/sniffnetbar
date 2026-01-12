@@ -12,6 +12,7 @@
 extern NSString * const kVirusTotalAPIKeyIdentifier;
 extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 extern NSString * const kGreyNoiseAPIKeyIdentifier;
+extern NSString * const kIpInfoAPITokenIdentifier;
 
 void printUsage(const char *progName) {
     printf("Usage: %s <provider> <api_key>\n", progName);
@@ -19,10 +20,12 @@ void printUsage(const char *progName) {
     printf("  virustotal    Set VirusTotal API key\n");
     printf("  abuseipdb     Set AbuseIPDB API key\n");
     printf("  greynoise     Set GreyNoise API key\n");
+    printf("  ipinfo        Set ipinfo.io API token (used for geolocation)\n");
     printf("\nExamples:\n");
     printf("  %s virustotal abc123def456\n", progName);
-    printf("  %s abuseipdb xyz789uvw012\n", progName);
-    printf("  %s greynoise gn_1234567890\n", progName);
+            printf("  %s abuseipdb xyz789uvw012\n", progName);
+            printf("  %s greynoise gn_1234567890\n", progName);
+            printf("  %s ipinfo YOUR_TOKEN_HERE\n", progName);
     printf("\nTo remove a key, use remove_apikey command\n");
 }
 
@@ -45,9 +48,11 @@ int main(int argc, const char * argv[]) {
             identifier = kAbuseIPDBAPIKeyIdentifier;
         } else if ([provider isEqualToString:@"greynoise"]) {
             identifier = kGreyNoiseAPIKeyIdentifier;
+        } else if ([provider isEqualToString:@"ipinfo"]) {
+            identifier = kIpInfoAPITokenIdentifier;
         } else {
             printf("Error: Unknown provider '%s'\n", [provider UTF8String]);
-            printf("Valid providers: virustotal, abuseipdb, greynoise\n");
+            printf("Valid providers: virustotal, abuseipdb, greynoise, ipinfo\n");
             return 1;
         }
 

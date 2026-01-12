@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 extern NSString * const kVirusTotalAPIKeyIdentifier;
 extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 extern NSString * const kGreyNoiseAPIKeyIdentifier;
+extern NSString * const kIpInfoAPITokenIdentifier;
 
 /**
  * Centralized configuration manager that loads settings from Configuration.plist
@@ -52,6 +53,7 @@ extern NSString * const kGreyNoiseAPIKeyIdentifier;
 @property (nonatomic, readonly) NSInteger connectionLineWeight;
 @property (nonatomic, readonly) CGFloat connectionLineOpacity;
 @property (nonatomic, readonly) NSUInteger geoLocationSemaphoreLimit;
+@property (nonatomic, readonly) NSString *ipInfoAPIToken;
 
 // Threat Intelligence Configuration
 @property (nonatomic, readonly) NSUInteger threatIntelCacheSize;

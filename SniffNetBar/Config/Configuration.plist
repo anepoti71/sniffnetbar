@@ -39,6 +39,8 @@
 	<!-- Map Configuration -->
 	<key>GeoLocationSemaphoreLimit</key>
 	<integer>5</integer>
+	<key>IpInfoAPIToken</key>
+	<string>YOUR_IPINFO_API_TOKEN_HERE</string>
 
 	<!-- Location Cache Configuration -->
 	<key>MaxLocationCacheSize</key>

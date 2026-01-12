@@ -540,7 +540,13 @@ static NSString *SNBLocationStoreDirectory(void) {
         if ([provider isEqualToString:@"ip-api.com"]) {
             urlString = [NSString stringWithFormat:@"https://ip-api.com/json/%@?fields=status,message,lat,lon,query", encodedIP];
         } else if ([provider isEqualToString:@"ipinfo.io"]) {
-            urlString = [NSString stringWithFormat:@"https://ipinfo.io/%@/json", encodedIP];
+            NSString *token = [ConfigurationManager sharedManager].ipInfoAPIToken;
+            NSString *encodedToken = token.length > 0 ? [token stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]] : @"";
+            if (encodedToken.length > 0) {
+                urlString = [NSString stringWithFormat:@"https://ipinfo.io/%@/json?token=%@", encodedIP, encodedToken];
+            } else {
+                urlString = [NSString stringWithFormat:@"https://ipinfo.io/%@/json", encodedIP];
+            }
         } else {
             NSString *template = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeyMapProviderURLTemplate];
             if (template.length == 0) {

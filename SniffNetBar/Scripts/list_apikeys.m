@@ -12,6 +12,7 @@
 extern NSString * const kVirusTotalAPIKeyIdentifier;
 extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 extern NSString * const kGreyNoiseAPIKeyIdentifier;
+extern NSString * const kIpInfoAPITokenIdentifier;
 
 NSString *maskAPIKey(NSString *apiKey) {
     if (!apiKey || apiKey.length == 0) {
@@ -32,7 +33,8 @@ int main(int argc, const char * argv[]) {
         NSArray<NSDictionary *> *providers = @[
             @{@"name": @"VirusTotal", @"identifier": kVirusTotalAPIKeyIdentifier},
             @{@"name": @"AbuseIPDB", @"identifier": kAbuseIPDBAPIKeyIdentifier},
-            @{@"name": @"GreyNoise", @"identifier": kGreyNoiseAPIKeyIdentifier}
+            @{@"name": @"GreyNoise", @"identifier": kGreyNoiseAPIKeyIdentifier},
+            @{@"name": @"ipinfo", @"identifier": kIpInfoAPITokenIdentifier}
         ];
 
         for (NSDictionary *provider in providers) {
