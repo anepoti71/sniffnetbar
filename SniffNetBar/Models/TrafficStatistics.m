@@ -30,10 +30,14 @@ static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 static const long kMaxConcurrentDNSLookups = 8;
 static const NSUInteger kMaxProcessCacheSize = 500;
 static const NSTimeInterval kProcessCacheExpirationTime = 300.0; // 5 minutes
+static const NSUInteger kMaxPortProcessCacheSize = 256;
+static const NSTimeInterval kPortProcessCacheExpirationTime = 120.0; // 2 minutes
 static const NSUInteger kMaxPendingDNSLookups = 100; // Max queued DNS lookups (prevents memory leak)
 
 // Special marker for failed DNS lookups
 static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
+
+@class SNBConnectionKey;
 
 @interface TrafficStatistics ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, HostTraffic *> *hostStats;
@@ -45,6 +49,8 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 @property (nonatomic, strong) NSMutableSet<NSString *> *localAddresses;
 @property (nonatomic, strong) SNBExpiringCache<NSString *, NSString *> *hostnameCache;
 @property (nonatomic, strong) SNBExpiringCache<id, id> *processCache;
+@property (nonatomic, strong) SNBExpiringCache<SNBConnectionKey *, ProcessInfo *> *lsofProcessCache;
+@property (nonatomic, strong) SNBExpiringCache<NSNumber *, ProcessInfo *> *portProcessCache;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSObject *> *dnsLookupLocks;
 @property (nonatomic, strong) NSMutableDictionary *processLookupLocks;
 @property (nonatomic, strong) dispatch_queue_t dnsLookupQueue;
@@ -61,6 +67,8 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 @property (nonatomic, assign) uint64_t cachedBytesPerSecond;
 @property (nonatomic, strong) NSTimer *samplingTimer;
 @property (nonatomic, assign) NSUInteger pendingDNSLookupCount;
+@property (nonatomic, strong) NSMutableDictionary<SNBConnectionKey *, ProcessInfo *> *pendingHelperProcessInfos;
+@property (nonatomic, strong) NSMutableDictionary<SNBConnectionKey *, ProcessInfo *> *pendingLsofProcessInfos;
 @end
 
 @interface SNBConnectionKey : NSObject <NSCopying>
@@ -124,6 +132,11 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 }
 
 @end
+
+typedef NS_ENUM(NSUInteger, SNBProcessLookupSource) {
+    SNBProcessLookupSourceHelper,
+    SNBProcessLookupSourceLsof
+};
 
 typedef struct {
     BOOL resolved;
@@ -233,14 +246,20 @@ static NSString *SNBResolveHostname(NSString *address,
         _hostStats = [NSMutableDictionary dictionary];
         _connectionStats = [NSMutableDictionary dictionary];
         _hostnameCache = [[SNBExpiringCache alloc] initWithMaxSize:kMaxHostnameCacheSize
-                                                expirationInterval:kCacheExpirationTime];
+                                               expirationInterval:kCacheExpirationTime];
         _processCache = [[SNBExpiringCache alloc] initWithMaxSize:kMaxProcessCacheSize
-                                              expirationInterval:kProcessCacheExpirationTime];
+                                             expirationInterval:kProcessCacheExpirationTime];
+        _lsofProcessCache = [[SNBExpiringCache alloc] initWithMaxSize:kMaxProcessCacheSize
+                                                 expirationInterval:kProcessCacheExpirationTime];
+        _portProcessCache = [[SNBExpiringCache alloc] initWithMaxSize:kMaxPortProcessCacheSize
+                                                   expirationInterval:kPortProcessCacheExpirationTime];
         _dnsLookupLocks = [NSMutableDictionary dictionary];
         _processLookupLocks = [NSMutableDictionary dictionary];
         _dnsLookupQueue = dispatch_queue_create("com.sniffnetbar.dnslookup", DISPATCH_QUEUE_CONCURRENT);
         _dnsLookupSemaphore = dispatch_semaphore_create(kMaxConcurrentDNSLookups);
         _statsQueue = dispatch_queue_create("com.sniffnetbar.stats", DISPATCH_QUEUE_SERIAL);
+        _pendingHelperProcessInfos = [NSMutableDictionary dictionary];
+        _pendingLsofProcessInfos = [NSMutableDictionary dictionary];
         _localAddresses = [NSMutableSet set];
         _statsCacheDirty = YES;
         [self loadLocalAddresses];
@@ -440,47 +459,54 @@ static NSString *SNBResolveHostname(NSString *address,
                 // Lookup process information asynchronously
                 // Only lookup for outgoing connections (where source is local)
                 if (!isIncoming && connectionSourcePort > 0 && connectionDestinationPort > 0) {
-                    BOOL shouldLookupProcess = YES;
-                    id cachedProcess = [self.processCache objectForKey:connectionKey];
-                    if (cachedProcess && cachedProcess != [NSNull null]) {
-                        ProcessInfo *processInfo = (ProcessInfo *)cachedProcess;
-                        connection.processName = processInfo.processName;
-                        connection.processPID = processInfo.pid;
-                        shouldLookupProcess = NO;
-                    } else if (cachedProcess == [NSNull null]) {
-                        shouldLookupProcess = NO;
+                    id cachedHelperObj = [self.processCache objectForKey:connectionKey];
+                    ProcessInfo *cachedHelper = (cachedHelperObj == [NSNull null]) ? nil : (ProcessInfo *)cachedHelperObj;
+                    ProcessInfo *cachedLsof = [self.lsofProcessCache objectForKey:connectionKey];
+                    ProcessInfo *finalCached = [self finalProcessInfoFromHelper:cachedHelper fallback:cachedLsof];
+                    if (!finalCached) {
+                        ProcessInfo *cachedByPort = [self cachedProcessInfoForPort:connectionSourcePort];
+                        if (cachedByPort) {
+                            SNBLogDebug("Port cache hit for source port %ld", (long)connectionSourcePort);
+                            [self assignProcessInfo:cachedByPort forConnectionKey:connectionKey];
+                            finalCached = cachedByPort;
+                        }
+                    }
+                    if (finalCached) {
+                        connection.processName = finalCached.processName;
+                        connection.processPID = finalCached.pid;
                     }
 
-                    if (shouldLookupProcess) {
+                    BOOL shouldLookupHelper = cachedHelper == nil;
+                    BOOL shouldLookupFallback = cachedLsof == nil;
+
+                    if (shouldLookupHelper) {
                         SNBLogDebug("Process lookup: %@:%ld -> %@:%ld",
                               connectionSource, (long)connectionSourcePort,
                               connectionDestination, (long)connectionDestinationPort);
-                    __weak typeof(self) weakSelf = self;
-                    [self performProcessLookup:connectionSource
-                                    sourcePort:connectionSourcePort
-                                   destination:connectionDestination
-                               destinationPort:connectionDestinationPort
-                                   lookupKey:connectionKey
-                                    completion:^(ProcessInfo *processInfo) {
-                        __strong typeof(weakSelf) strongSelf = weakSelf;
-                        if (!strongSelf) return;
+                        __weak typeof(self) weakSelf = self;
+                        [self performProcessLookup:connectionSource
+                                        sourcePort:connectionSourcePort
+                                       destination:connectionDestination
+                                   destinationPort:connectionDestinationPort
+                                        lookupKey:connectionKey
+                                         completion:^(ProcessInfo *processInfo) {
+                            __strong typeof(weakSelf) strongSelf = weakSelf;
+                            if (!strongSelf) return;
 
-                        dispatch_async(strongSelf.statsQueue, ^{
-                            ConnectionTraffic *conn = strongSelf.connectionStats[connectionKey];
-                            if (conn && processInfo) {
-                                SNBLogDebug("✓ Found process: %@ (PID %d) for %@:%ld -> %@:%ld",
-                                      processInfo.processName, processInfo.pid,
-                                      connectionSource, (long)connectionSourcePort,
-                                      connectionDestination, (long)connectionDestinationPort);
-                                conn.processName = processInfo.processName;
-                                conn.processPID = processInfo.pid;
-                                [strongSelf.processCache setObject:processInfo forKey:connectionKey];
-                            } else if (conn) {
-                                SNBLogDebug("✗ No process found for connection %@", [connectionKey stringValue]);
-                                [strongSelf.processCache setObject:[NSNull null] forKey:connectionKey];
-                            }
-                        });
-                    }];
+                            dispatch_async(strongSelf.statsQueue, ^{
+                                [strongSelf handleProcessLookupResult:processInfo
+                                                         connectionKey:connectionKey
+                                                                source:SNBProcessLookupSourceHelper];
+                            });
+                        }];
+                    }
+
+                    if (shouldLookupFallback) {
+                        [self scheduleLsofLookupForConnectionKey:connectionKey
+                                                         source:connectionSource
+                                                    sourcePort:connectionSourcePort
+                                                   destination:connectionDestination
+                                              destinationPort:connectionDestinationPort];
                     }
                 } else {
                     if (isIncoming) {
@@ -581,11 +607,140 @@ static NSString *SNBResolveHostname(NSString *address,
         // Clean up lock
         @synchronized(self.processLookupLocks) {
             if (self.processLookupLocks[lookupKey] == lock) {
-                [self.processLookupLocks removeObjectForKey:lookupKey];
+        [self.processLookupLocks removeObjectForKey:lookupKey];
             }
         }
     }];
 }
+
+- (void)scheduleLsofLookupForConnectionKey:(SNBConnectionKey *)connectionKey
+                                     source:(NSString *)sourceAddress
+                                sourcePort:(NSInteger)sourcePort
+                               destination:(NSString *)destinationAddress
+                          destinationPort:(NSInteger)destinationPort {
+    if (!connectionKey) {
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        ProcessInfo *lsofInfo = [ProcessLookup lookupUsingLsofForSource:sourceAddress
+                                                              sourcePort:sourcePort
+                                                             destination:destinationAddress
+                                                        destinationPort:destinationPort];
+        dispatch_async(self.statsQueue, ^{
+            SNBLogDebug("lsof lookup result: %@", lsofInfo ? lsofInfo.processName : @"<nil>");
+            [self handleProcessLookupResult:lsofInfo
+                                 connectionKey:connectionKey
+                                        source:SNBProcessLookupSourceLsof];
+        });
+    });
+}
+
+- (void)handleProcessLookupResult:(ProcessInfo *)processInfo
+                     connectionKey:(SNBConnectionKey *)connectionKey
+                            source:(SNBProcessLookupSource)source {
+    if (!connectionKey) {
+        return;
+    }
+
+    if (processInfo) {
+        if (source == SNBProcessLookupSourceHelper) {
+            self.pendingHelperProcessInfos[connectionKey] = processInfo;
+        } else {
+            self.pendingLsofProcessInfos[connectionKey] = processInfo;
+        }
+    } else if (source == SNBProcessLookupSourceHelper) {
+        [self.processCache setObject:[NSNull null] forKey:connectionKey];
+        SNBLogDebug("Helper lookup failed for %@ -> %@", connectionKey.source, connectionKey.destination);
+    }
+
+    ProcessInfo *helperInfo = self.pendingHelperProcessInfos[connectionKey];
+    ProcessInfo *lsofInfo = self.pendingLsofProcessInfos[connectionKey];
+    ProcessInfo *finalInfo = [self selectedProcessInfoWithHelper:helperInfo fallback:lsofInfo];
+
+    if (!finalInfo) {
+        return;
+    }
+
+    [self assignProcessInfo:finalInfo forConnectionKey:connectionKey];
+    [self.pendingHelperProcessInfos removeObjectForKey:connectionKey];
+    [self.pendingLsofProcessInfos removeObjectForKey:connectionKey];
+}
+
+- (ProcessInfo *)selectedProcessInfoWithHelper:(ProcessInfo *)helper fallback:(ProcessInfo *)fallback {
+    if (helper && fallback) {
+        if ([self processInfo:helper matchesProcessInfo:fallback]) {
+            return helper;
+        }
+        SNBLogDebug("Process lookup mismatch: helper=%@ (%d) lsof=%@ (%d)",
+                    helper.processName, helper.pid,
+                    fallback.processName, fallback.pid);
+        return helper;
+    }
+    return helper ?: fallback;
+}
+
+- (BOOL)processInfo:(ProcessInfo *)first matchesProcessInfo:(ProcessInfo *)second {
+    if (!first || !second) {
+        return NO;
+    }
+    if (first.pid > 0 && second.pid > 0 && first.pid == second.pid) {
+        return YES;
+    }
+    if (first.processName.length > 0 && second.processName.length > 0 &&
+        [first.processName isEqualToString:second.processName]) {
+        return YES;
+    }
+    if (first.executablePath.length > 0 && second.executablePath.length > 0 &&
+        [first.executablePath isEqualToString:second.executablePath]) {
+        return YES;
+    }
+    return NO;
+}
+
+- (void)assignProcessInfo:(ProcessInfo *)processInfo forConnectionKey:(SNBConnectionKey *)connectionKey {
+    if (!processInfo || !connectionKey) {
+        return;
+    }
+    ConnectionTraffic *connection = self.connectionStats[connectionKey];
+    if (!connection) {
+        return;
+    }
+    if (processInfo.processName.length > 0) {
+        connection.processName = processInfo.processName;
+    }
+    connection.processPID = processInfo.pid;
+
+    [self.processCache setObject:processInfo forKey:connectionKey];
+    [self.lsofProcessCache setObject:processInfo forKey:connectionKey];
+    self.statsCacheDirty = YES;
+    SNBLogDebug("Process info cached for %@: %@ (%d)", [connectionKey stringValue], connection.processName, connection.processPID);
+    [self cacheProcessInfo:processInfo forSourcePort:connection.sourcePort];
+}
+
+- (ProcessInfo *)finalProcessInfoFromHelper:(ProcessInfo *)helper fallback:(ProcessInfo *)fallback {
+    return [self selectedProcessInfoWithHelper:helper fallback:fallback];
+}
+
+- (ProcessInfo *)cachedProcessInfoForPort:(NSInteger)port {
+    if (port <= 0) {
+        return nil;
+    }
+    NSNumber *key = @(port);
+    ProcessInfo *info = [self.portProcessCache objectForKey:key];
+    if (info.processName.length == 0) {
+        return nil;
+    }
+    return info;
+}
+
+- (void)cacheProcessInfo:(ProcessInfo *)processInfo forSourcePort:(NSInteger)port {
+    if (port <= 0 || !processInfo || processInfo.processName.length == 0) {
+        return;
+    }
+    NSNumber *key = @(port);
+    [self.portProcessCache setObject:processInfo forKey:key];
+}
+
 
 - (NSArray<HostTraffic *> *)topHostsFromValues:(NSArray<HostTraffic *> *)values limit:(NSUInteger)limit {
     if (limit == 0 || values.count == 0) {

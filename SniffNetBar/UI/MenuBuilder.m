@@ -1217,17 +1217,24 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     }
 
     NSMutableArray<NSMenuItem *> *items = [NSMutableArray arrayWithCapacity:limit];
-    for (NSInteger i = 0; i < limit; i++) {
-        ConnectionTraffic *connection = connections[i];
-        NSString *bytesStr = [SNBByteFormatter stringFromBytes:connection.bytes];
-        NSString *sourceLabel = [self sourceLabelForConnection:connection];
-        NSString *fullText = [NSString stringWithFormat:@"  %@:%ld → %@:%ld - %@",
-                               sourceLabel,
-                               (long)connection.sourcePort,
+        for (NSInteger i = 0; i < limit; i++) {
+            ConnectionTraffic *connection = connections[i];
+            NSString *bytesStr = [SNBByteFormatter stringFromBytes:connection.bytes];
+            NSString *sourceLabel = [self sourceLabelForConnection:connection];
+            NSString *fullText = [NSString stringWithFormat:@"  %@:%ld → %@:%ld - %@",
+                                   sourceLabel,
+                                   (long)connection.sourcePort,
                                connection.destinationAddress,
                                (long)connection.destinationPort,
                                bytesStr];
-        NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
+            if (connection.processName.length == 0) {
+                SNBLogUIDebug("Top connection without processName: %@:%ld -> %@:%ld bytes=%@", connection.sourceAddress,
+                              (long)connection.sourcePort, connection.destinationAddress,
+                              (long)connection.destinationPort, bytesStr);
+            } else {
+                SNBLogUIDebug("Top connection uses process %@ (PID %d)", connection.processName, connection.processPID);
+            }
+            NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
         connectionItem.enabled = NO;
         [items addObject:connectionItem];
     }
@@ -1928,7 +1935,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     [self cacheDetailItem:packetsItem label:@"Packets:" color:[NSColor labelColor] forKey:SNBMenuItemKeyDetailPackets];
     [detailsSubmenu addItem:packetsItem];
 
-    if (self.showTopHosts && stats.topHosts.count > 0) {
+    if (self.showTopHosts) {
         [detailsSubmenu addItem:[NSMenuItem separatorItem]];
         NSString *topHostsTitle = [NSString stringWithFormat:@"TOP %lu HOSTS by Traffic",
                                     (unsigned long)self.configuration.maxTopHostsToShow];
@@ -1940,17 +1947,25 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         [detailsSubmenu addItem:topHostsHeader];
 
         if (self.sectionTopHostsExpanded) {
-            NSInteger count = MIN(config.maxTopHostsToShow, stats.topHosts.count);
-            for (NSInteger i = 0; i < count; i++) {
-                HostTraffic *host = stats.topHosts[i];
-                NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
-                NSString *hostDisplay = hostName.length > 0 ? [NSString stringWithFormat:@"%@ (%@)", hostName, host.address] : host.address;
-                NSString *bytesStr = [SNBByteFormatter stringFromBytes:host.bytes];
+            if (stats.topHosts.count == 0) {
+                NSMenuItem *emptyItem = [[NSMenuItem alloc] initWithTitle:@"  No hosts captured yet"
+                                                                    action:nil
+                                                             keyEquivalent:@""];
+                emptyItem.enabled = NO;
+                [detailsSubmenu addItem:emptyItem];
+            } else {
+                NSInteger count = MIN(config.maxTopHostsToShow, stats.topHosts.count);
+                for (NSInteger i = 0; i < count; i++) {
+                    HostTraffic *host = stats.topHosts[i];
+                    NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
+                    NSString *hostDisplay = hostName.length > 0 ? [NSString stringWithFormat:@"%@ (%@)", hostName, host.address] : host.address;
+                    NSString *bytesStr = [SNBByteFormatter stringFromBytes:host.bytes];
 
-                NSString *fullText = [NSString stringWithFormat:@"  %@ - %@", hostDisplay, bytesStr];
-                NSMenuItem *hostItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
-                hostItem.enabled = NO;
-                [detailsSubmenu addItem:hostItem];
+                    NSString *fullText = [NSString stringWithFormat:@"  %@ - %@", hostDisplay, bytesStr];
+                    NSMenuItem *hostItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
+                    hostItem.enabled = NO;
+                    [detailsSubmenu addItem:hostItem];
+                }
             }
         }
 
@@ -1962,7 +1977,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         self.topHostsSectionSeparator = nil;
     }
 
-    if (self.showTopConnections && stats.topConnections.count > 0) {
+    if (self.showTopConnections) {
         if (!self.topHostsSectionHeader) {
             [detailsSubmenu addItem:[NSMenuItem separatorItem]];
         }
@@ -1976,21 +1991,29 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         [detailsSubmenu addItem:topConnectionsHeader];
 
         if (self.sectionTopConnectionsExpanded) {
-            NSInteger count = MIN(config.maxTopConnectionsToShow, stats.topConnections.count);
-            for (NSInteger i = 0; i < count; i++) {
-                ConnectionTraffic *connection = stats.topConnections[i];
-                NSString *bytesStr = [SNBByteFormatter stringFromBytes:connection.bytes];
+            if (stats.topConnections.count == 0) {
+                NSMenuItem *emptyItem = [[NSMenuItem alloc] initWithTitle:@"  No connections captured yet"
+                                                                    action:nil
+                                                             keyEquivalent:@""];
+                emptyItem.enabled = NO;
+                [detailsSubmenu addItem:emptyItem];
+            } else {
+                NSInteger count = MIN(config.maxTopConnectionsToShow, stats.topConnections.count);
+                for (NSInteger i = 0; i < count; i++) {
+                    ConnectionTraffic *connection = stats.topConnections[i];
+                    NSString *bytesStr = [SNBByteFormatter stringFromBytes:connection.bytes];
 
-                NSString *fullText = [NSString stringWithFormat:@"  %@:%ld → %@:%ld - %@",
-                           connection.sourceAddress,
-                           (long)connection.sourcePort,
-                           connection.destinationAddress,
-                           (long)connection.destinationPort,
-                           bytesStr];
+                    NSString *fullText = [NSString stringWithFormat:@"  %@:%ld → %@:%ld - %@",
+                                          connection.sourceAddress,
+                                          (long)connection.sourcePort,
+                                          connection.destinationAddress,
+                                          (long)connection.destinationPort,
+                                          bytesStr];
 
-                NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
-                connectionItem.enabled = NO;
-                [detailsSubmenu addItem:connectionItem];
+                    NSMenuItem *connectionItem = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
+                    connectionItem.enabled = NO;
+                    [detailsSubmenu addItem:connectionItem];
+                }
             }
         }
 
