@@ -330,7 +330,7 @@ static NSString *SNBLocationStoreDirectory(void) {
             return;
         }
 
-        NSMutableArray<NSDictionary *> *points = [NSMutableArray array];
+        NSMutableDictionary<NSString *, NSMutableArray<NSDictionary *> *> *pointsByCoord = [NSMutableDictionary dictionary];
         for (NSString *ip in targetIPs) {
             NSDictionary *value = locationByIP[ip];
             if (!value) {
@@ -345,11 +345,43 @@ static NSString *SNBLocationStoreDirectory(void) {
             NSString *name = value[@"name"];
             NSString *isp = value[@"isp"];
             NSString *locationPart = name.length > 0 ? [NSString stringWithFormat:@"%@ — %@", ip, name] : ip;
-            NSString *title = isp.length > 0 ? [NSString stringWithFormat:@"%@\nISP: %@", locationPart, isp] : locationPart;
-            [points addObject:@{@"lat": @(coord.latitude), @"lon": @(coord.longitude), @"title": title}];
-            SNBLogUIDebug("Map marker: %{public}@ (%f, %f) %@",
-                          ip, coord.latitude, coord.longitude, name ?: @"");
+            NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+            payload[@"lat"] = @(coord.latitude);
+            payload[@"lon"] = @(coord.longitude);
+            payload[@"ip"] = ip;
+            payload[@"title"] = isp.length > 0 ? [NSString stringWithFormat:@"%@\nISP: %@", locationPart, isp] : locationPart;
+            payload[@"name"] = name ?: @"";
+            payload[@"isp"] = isp ?: @"";
+
+            NSString *coordKey = [NSString stringWithFormat:@"%.6f,%.6f", coord.latitude, coord.longitude];
+            NSMutableArray<NSDictionary *> *group = pointsByCoord[coordKey];
+            if (!group) {
+                group = [NSMutableArray array];
+                pointsByCoord[coordKey] = group;
+            }
+            [group addObject:payload];
         }
+
+        NSMutableArray<NSDictionary *> *points = [NSMutableArray array];
+        [pointsByCoord enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSArray<NSDictionary *> *group, BOOL *stop) {
+            NSDictionary *firstPoint = group.firstObject;
+            NSMutableDictionary *pointData = [NSMutableDictionary dictionary];
+            pointData[@"lat"] = firstPoint[@"lat"];
+            pointData[@"lon"] = firstPoint[@"lon"];
+            pointData[@"ips"] = [group valueForKey:@"ip"];
+            if (group.count > 1) {
+                pointData[@"title"] = [NSString stringWithFormat:@"%@ (showing %lu IPs)",
+                                        firstPoint[@"name"] ?: group[0][@"ip"],
+                                        (unsigned long)group.count];
+                pointData[@"isDuplicate"] = @YES;
+                pointData[@"color"] = @"#ffad60";
+            } else {
+                pointData[@"title"] = firstPoint[@"title"];
+                pointData[@"isDuplicate"] = @NO;
+            }
+            [points addObject:pointData];
+            SNBLogUIDebug("Map marker: %@ @ (%f, %f) duplicates=%@", pointData[@"ips"], [pointData[@"lat"] doubleValue], [pointData[@"lon"] doubleValue], pointData[@"isDuplicate"]);
+        }];
 
         CLLocationCoordinate2D publicCoord = kCLLocationCoordinate2DInvalid;
         if (publicCoordValue) {
@@ -474,7 +506,21 @@ static NSString *SNBLocationStoreDirectory(void) {
     "function setMarkers(points,connections){clearMarkers();clearLines();var bounds=[];"
     "console.log('setMarkers called with',points?points.length:0,'points and',connections?connections.length:0,'connections');"
     "if(points){points.forEach(function(p){if(typeof p.lat!=='number'||typeof p.lon!=='number'){return;}"
-    "var m=L.marker([p.lat,p.lon]);if(p.title){m.bindPopup(p.title);}m.addTo(map);markers.push(m);bounds.push([p.lat,p.lon]);});}"
+    "var popupContent='';"
+    "if(Array.isArray(p.ips)&&p.ips.length>0){"
+    "  popupContent='<strong>IPs at this location:</strong><br>'+p.ips.join('<br>');"
+    "}else if(p.title){"
+    "  popupContent=p.title;"
+    "}"
+    "var marker;"
+    "if(p.isDuplicate){"
+    "  var color=p.color||'#ffad60';"
+    "  marker=L.circleMarker([p.lat,p.lon],{radius:7,color:color,fillColor:color,fillOpacity:0.9,weight:2});"
+    "}else{"
+    "  marker=L.marker([p.lat,p.lon]);"
+    "}"
+    "if(popupContent){marker.bindPopup(popupContent);}"
+    "marker.addTo(map);markers.push(marker);bounds.push([p.lat,p.lon]);});}"
     "if(connections){console.log('Processing connections:',connections);connections.forEach(function(c){"
     "console.log('Connection:',c);if(typeof c.srcLat!=='number'||typeof c.srcLon!=='number'||typeof c.dstLat!=='number'||typeof c.dstLon!=='number'){console.log('Invalid coords, skipping');return;}"
     "var arcPts=arcPoints({lat:c.srcLat,lon:c.srcLon},{lat:c.dstLat,lon:c.dstLon});console.log('Arc points:',arcPts.length);"
