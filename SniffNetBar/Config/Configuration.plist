@@ -14,7 +14,7 @@
 	<key>MaxTopHostsToShow</key>
 	<integer>5</integer>
 	<key>MaxTopConnectionsToShow</key>
-	<integer>10</integer>
+	<integer>5</integer>
 	<key>MapMenuViewHeight</key>
 	<real>220.0</real>
 	<key>MenuFixedWidth</key>
