@@ -353,7 +353,8 @@ static NSString *SNBLocationStoreDirectory(void) {
             payload[@"name"] = name ?: @"";
             payload[@"isp"] = isp ?: @"";
 
-            NSString *coordKey = [NSString stringWithFormat:@"%.6f,%.6f", coord.latitude, coord.longitude];
+            // Group by 3 decimal places (~111m precision) to cluster nearby IPs
+            NSString *coordKey = [NSString stringWithFormat:@"%.3f,%.3f", coord.latitude, coord.longitude];
             NSMutableArray<NSDictionary *> *group = pointsByCoord[coordKey];
             if (!group) {
                 group = [NSMutableArray array];
@@ -369,14 +370,13 @@ static NSString *SNBLocationStoreDirectory(void) {
             pointData[@"lat"] = firstPoint[@"lat"];
             pointData[@"lon"] = firstPoint[@"lon"];
             pointData[@"ips"] = [group valueForKey:@"ip"];
+            pointData[@"names"] = [group valueForKey:@"name"];
+            pointData[@"isps"] = [group valueForKey:@"isp"];
+            pointData[@"locationName"] = firstPoint[@"name"] ?: @"";
             if (group.count > 1) {
-                pointData[@"title"] = [NSString stringWithFormat:@"%@ (showing %lu IPs)",
-                                        firstPoint[@"name"] ?: group[0][@"ip"],
-                                        (unsigned long)group.count];
                 pointData[@"isDuplicate"] = @YES;
                 pointData[@"color"] = @"#ffad60";
             } else {
-                pointData[@"title"] = firstPoint[@"title"];
                 pointData[@"isDuplicate"] = @NO;
             }
             [points addObject:pointData];
@@ -487,13 +487,51 @@ static NSString *SNBLocationStoreDirectory(void) {
     "<html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
     "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>"
-    "<style>html,body,#map{height:100%%;margin:0;}#map{background:#1b2b3a;}</style>"
+    "<style>"
+    "html,body,#map{height:100%%;margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}"
+    "#map{background:#f8fafc;}"
+    ".leaflet-popup-content-wrapper{background:#ffffff;color:#1e293b;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.15),"
+    "0 0 0 1px rgba(0,0,0,0.05);max-width:300px;min-width:200px;}"
+    ".leaflet-popup-content{margin:14px 16px;font-size:13px;line-height:1.6;}"
+    ".leaflet-popup-tip{background:#ffffff;}"
+    ".leaflet-popup-content .location-header{color:#0f172a;font-weight:600;font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:6px;}"
+    ".leaflet-popup-content .location-name{color:#64748b;font-size:12px;margin-bottom:10px;}"
+    ".leaflet-popup-content .ip-list{list-style:none;padding:0;margin:0;}"
+    ".leaflet-popup-content .ip-list li{padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.06);}"
+    ".leaflet-popup-content .ip-list li:last-child{border-bottom:none;padding-bottom:0;}"
+    ".leaflet-popup-content .ip-address{color:#0f172a;font-weight:500;font-size:13px;display:block;margin-bottom:2px;font-family:Monaco,Consolas,monospace;}"
+    ".leaflet-popup-content .ip-company{color:#64748b;font-size:12px;display:block;}"
+    ".cluster-marker{background:linear-gradient(135deg,#ef4444 0%%,#dc2626 100%%);"
+    "border:3px solid #ffffff;border-radius:50%%;box-shadow:0 3px 12px rgba(239,68,68,0.4),"
+    "0 0 0 4px rgba(239,68,68,0.15);display:flex;align-items:center;justify-content:center;"
+    "color:white;font-weight:bold;font-size:13px;transition:all 0.2s ease;text-align:center;"
+    "line-height:1;}"
+    ".cluster-marker>div{display:flex;align-items:center;justify-content:center;width:100%%;height:100%%;}"
+    ".cluster-marker:hover{transform:scale(1.15);box-shadow:0 5px 16px rgba(239,68,68,0.5),"
+    "0 0 0 6px rgba(239,68,68,0.25);}"
+    ".single-marker{width:28px;height:36px;position:relative;}"
+    ".single-marker::before{content:'';position:absolute;bottom:0;left:50%%;transform:translateX(-50%%);"
+    "width:0;height:0;border-left:14px solid transparent;border-right:14px solid transparent;"
+    "border-top:20px solid #2563eb;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.2));}"
+    ".single-marker::after{content:'';position:absolute;top:4px;left:50%%;transform:translateX(-50%%);"
+    "width:18px;height:18px;border-radius:50%%;background:#3b82f6;"
+    "box-shadow:0 0 0 3px rgba(255,255,255,0.9),0 2px 8px rgba(37,99,235,0.4),"
+    "inset 0 1px 3px rgba(255,255,255,0.5);}"
+    ".connection-line{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.15));}"
+    "@keyframes pulse{0%%,100%%{opacity:0.7;transform:scale(1);}50%%{opacity:1;transform:scale(1.08);}}"
+    "@keyframes dash{0%%{stroke-dashoffset:20;}100%%{stroke-dashoffset:0;}}"
+    ".leaflet-interactive.connection-line{animation:dash 1.5s linear infinite;}"
+    "</style>"
     "</head><body>"
     "<div id='map'></div>"
     "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>"
     "<script>"
     "var map=L.map('map',{zoomControl:false,attributionControl:false}).setView([20,0],2);"
-    "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);"
+    "L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);"
+    "var svg=document.createElementNS('http://www.w3.org/2000/svg','svg');"
+    "svg.setAttribute('width','0');svg.setAttribute('height','0');"
+    "svg.innerHTML='<defs><marker id=\"arrowhead\" markerWidth=\"10\" markerHeight=\"10\" refX=\"8\" refY=\"3\" orient=\"auto\"><polygon points=\"0 0, 10 3, 0 6\" fill=\"%@\" opacity=\"0.7\"/></marker></defs>';"
+    "document.body.appendChild(svg);"
     "var markers=[];var lines=[];var hasAutoFitted=false;"
     "function clearMarkers(){markers.forEach(function(m){map.removeLayer(m);});markers=[];}"
     "function clearLines(){lines.forEach(function(l){map.removeLayer(l);});lines=[];}"
@@ -508,51 +546,103 @@ static NSString *SNBLocationStoreDirectory(void) {
     "if(points){points.forEach(function(p){if(typeof p.lat!=='number'||typeof p.lon!=='number'){return;}"
     "var popupContent='';"
     "if(Array.isArray(p.ips)&&p.ips.length>0){"
-    "  popupContent='<strong>IPs at this location:</strong><br>'+p.ips.join('<br>');"
+    "  var count=p.ips.length;"
+    "  popupContent='<div class=\"location-header\">📍 '+count+' Connection'+(count>1?'s':'')+'</div>';"
+    "  if(p.locationName&&p.locationName.length>0){"
+    "    popupContent+='<div class=\"location-name\">'+p.locationName+'</div>';"
+    "  }"
+    "  popupContent+='<ul class=\"ip-list\">';"
+    "  p.ips.forEach(function(ip,idx){"
+    "    var isp=p.isps&&p.isps[idx]?p.isps[idx]:'';"
+    "    popupContent+='<li>';"
+    "    popupContent+='<span class=\"ip-address\">'+ip+'</span>';"
+    "    if(isp&&isp.length>0){"
+    "      popupContent+='<span class=\"ip-company\">'+isp+'</span>';"
+    "    }"
+    "    popupContent+='</li>';"
+    "  });"
+    "  popupContent+='</ul>';"
     "}else if(p.title){"
-    "  popupContent=p.title;"
+    "  popupContent='<div class=\"location-header\">📍 Location</div>'+p.title.replace(/\\n/g,'<br>');"
     "}"
     "var marker;"
     "if(p.isDuplicate){"
-    "  var color=p.color||'#ffad60';"
-    "  marker=L.circleMarker([p.lat,p.lon],{radius:7,color:color,fillColor:color,fillOpacity:0.9,weight:2});"
+    "  var count=p.ips?p.ips.length:0;"
+    "  var size=Math.min(44,Math.max(28,count*3+20));"
+    "  var icon=L.divIcon({"
+    "    className:'cluster-marker',"
+    "    html:'<div>'+count+'</div>',"
+    "    iconSize:[size,size],"
+    "    iconAnchor:[size/2,size/2]"
+    "  });"
+    "  marker=L.marker([p.lat,p.lon],{icon:icon});"
     "}else{"
-    "  marker=L.marker([p.lat,p.lon]);"
+    "  var icon=L.divIcon({"
+    "    className:'single-marker',"
+    "    html:'<div class=\"single-marker\"></div>',"
+    "    iconSize:[24,32],"
+    "    iconAnchor:[12,32]"
+    "  });"
+    "  marker=L.marker([p.lat,p.lon],{icon:icon});"
     "}"
     "if(popupContent){marker.bindPopup(popupContent);}"
     "marker.addTo(map);markers.push(marker);bounds.push([p.lat,p.lon]);});}"
-    "if(connections){console.log('Processing connections:',connections);connections.forEach(function(c){"
+    "if(connections){console.log('Processing connections:',connections);connections.forEach(function(c,idx){"
     "console.log('Connection:',c);if(typeof c.srcLat!=='number'||typeof c.srcLon!=='number'||typeof c.dstLat!=='number'||typeof c.dstLon!=='number'){console.log('Invalid coords, skipping');return;}"
     "var arcPts=arcPoints({lat:c.srcLat,lon:c.srcLon},{lat:c.dstLat,lon:c.dstLon});console.log('Arc points:',arcPts.length);"
-    "var line=L.polyline(arcPts,{color:'%@',weight:%ld,opacity:%f});"
-    "if(c.title){line.bindPopup(c.title);}line.addTo(map);lines.push(line);console.log('Line added to map');bounds.push([c.srcLat,c.srcLon]);bounds.push([c.dstLat,c.dstLon]);});}"
+    "var opacity=Math.max(0.3,1-(idx*0.08));"
+    "var lineWeight=Math.max(1,%ld-(idx*0.3));"
+    "var line=L.polyline(arcPts,{color:'%@',weight:lineWeight,opacity:opacity*%f,dashArray:'8,12',className:'connection-line'});"
+    "line.on('add',function(){var path=line.getElement();if(path){path.setAttribute('marker-end','url(#arrowhead)');}});"
+    "if(c.title){var popupContent='<strong>🔄 Connection</strong><br>'+c.title.replace(/→/g,'<br>→ ');line.bindPopup(popupContent);}"
+    "line.addTo(map);lines.push(line);console.log('Line added to map');bounds.push([c.srcLat,c.srcLon]);bounds.push([c.dstLat,c.dstLon]);});}"
     "if(bounds.length>0&&!hasAutoFitted){map.fitBounds(bounds,{padding:[20,20],maxZoom:6});hasAutoFitted=true;}}"
     "function zoomIn(){map.zoomIn();}"
     "function zoomOut(){map.zoomOut();}"
     "function resetView(){hasAutoFitted=false;}"
     "window.SniffNetBar={setMarkers:setMarkers,zoomIn:zoomIn,zoomOut:zoomOut,resetView:resetView};"
-    "</script></body></html>", lineColor, (long)lineWeight, lineOpacity];
+    "</script></body></html>", lineColor, (long)lineWeight, lineColor, lineOpacity];
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
 - (NSButton *)zoomButtonWithTitle:(NSString *)title action:(SEL)action {
-    NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 22, 22)];
+    NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 32, 32)];
     button.title = title;
-    button.bezelStyle = NSBezelStyleTexturedRounded;
+    button.bezelStyle = NSBezelStyleShadowlessSquare;
     button.target = self;
     button.action = action;
-    button.font = [NSFont boldSystemFontOfSize:14.0];
+    button.font = [NSFont boldSystemFontOfSize:18.0];
+    button.bordered = YES;
+    button.wantsLayer = YES;
+    button.layer.backgroundColor = [[NSColor colorWithWhite:1.0 alpha:0.95] CGColor];
+    button.layer.cornerRadius = 8.0;
+    button.layer.borderWidth = 1.0;
+    button.layer.borderColor = [[NSColor colorWithRed:0 green:0 blue:0 alpha:0.1] CGColor];
+    button.layer.shadowColor = [[NSColor blackColor] CGColor];
+    button.layer.shadowOpacity = 0.15;
+    button.layer.shadowOffset = NSMakeSize(0, 2);
+    button.layer.shadowRadius = 4.0;
+
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.alignment = NSTextAlignmentCenter;
+    NSDictionary *attributes = @{
+        NSForegroundColorAttributeName: [NSColor colorWithRed:0.09 green:0.09 blue:0.11 alpha:1.0],
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:18.0],
+        NSParagraphStyleAttributeName: style
+    };
+    button.attributedTitle = [[NSAttributedString alloc] initWithString:title attributes:attributes];
+
     return button;
 }
 
 - (void)updateLayout {
     self.webView.frame = self.bounds;
-    CGFloat padding = 6.0;
-    CGFloat buttonSize = 22.0;
+    CGFloat padding = 10.0;
+    CGFloat buttonSize = 32.0;
     CGFloat right = NSMaxX(self.bounds) - padding - buttonSize;
     CGFloat top = NSMaxY(self.bounds) - padding - buttonSize;
     self.zoomInButton.frame = NSMakeRect(right, top, buttonSize, buttonSize);
-    self.zoomOutButton.frame = NSMakeRect(right, top - buttonSize - 4.0, buttonSize, buttonSize);
+    self.zoomOutButton.frame = NSMakeRect(right, top - buttonSize - 8.0, buttonSize, buttonSize);
 
     // Ensure buttons stay on top of webview
     [self.zoomInButton removeFromSuperview];
