@@ -502,11 +502,26 @@ static NSString *SNBResolveHostname(NSString *address,
                     }
 
                     if (shouldLookupFallback) {
-                        [self scheduleLsofLookupForConnectionKey:connectionKey
-                                                         source:connectionSource
-                                                    sourcePort:connectionSourcePort
-                                                   destination:connectionDestination
-                                              destinationPort:connectionDestinationPort];
+                        // For new connections, do immediate synchronous native lookup
+                        // to catch short-lived connections before they close
+                        ProcessInfo *immediateResult = [ProcessLookup lookupUsingNativeAPIForSource:connectionSource
+                                                                                          sourcePort:connectionSourcePort
+                                                                                         destination:connectionDestination
+                                                                                     destinationPort:connectionDestinationPort];
+                        if (immediateResult) {
+                            SNBLogDebug("Immediate native lookup succeeded: %@ (PID %d)", immediateResult.processName, immediateResult.pid);
+                            connection.processName = immediateResult.processName;
+                            connection.processPID = immediateResult.pid;
+                            [self.lsofProcessCache setObject:immediateResult forKey:connectionKey];
+                            [self cacheProcessInfo:immediateResult forSourcePort:connectionSourcePort];
+                        } else {
+                            // If immediate lookup fails, schedule async lookup as backup
+                            [self scheduleNativeLookupForConnectionKey:connectionKey
+                                                                source:connectionSource
+                                                            sourcePort:connectionSourcePort
+                                                           destination:connectionDestination
+                                                      destinationPort:connectionDestinationPort];
+                        }
                     }
                 } else {
                     if (isIncoming) {
@@ -613,6 +628,29 @@ static NSString *SNBResolveHostname(NSString *address,
     }];
 }
 
+- (void)scheduleNativeLookupForConnectionKey:(SNBConnectionKey *)connectionKey
+                                       source:(NSString *)sourceAddress
+                                   sourcePort:(NSInteger)sourcePort
+                                  destination:(NSString *)destinationAddress
+                              destinationPort:(NSInteger)destinationPort {
+    if (!connectionKey) {
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        ProcessInfo *nativeInfo = [ProcessLookup lookupUsingNativeAPIForSource:sourceAddress
+                                                                     sourcePort:sourcePort
+                                                                    destination:destinationAddress
+                                                                destinationPort:destinationPort];
+        dispatch_async(self.statsQueue, ^{
+            SNBLogDebug("Native lookup result: %@", nativeInfo ? nativeInfo.processName : @"<nil>");
+            [self handleProcessLookupResult:nativeInfo
+                              connectionKey:connectionKey
+                                     source:SNBProcessLookupSourceLsof];
+        });
+    });
+}
+
+// Keep the old lsof method as a backup fallback option
 - (void)scheduleLsofLookupForConnectionKey:(SNBConnectionKey *)connectionKey
                                      source:(NSString *)sourceAddress
                                 sourcePort:(NSInteger)sourcePort

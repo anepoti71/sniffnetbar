@@ -50,3 +50,15 @@ NS_ASSUME_NONNULL_END
                                    destinationPort:(NSInteger)destinationPort;
 
 @end
+
+@interface ProcessLookup (Native)
+
+/// Native macOS API-based lookup using libproc (most reliable).
+/// Uses proc_listpids() and proc_pidfdinfo() to enumerate all process sockets
+/// and match connection details directly without text parsing.
++ (nullable ProcessInfo *)lookupUsingNativeAPIForSource:(NSString *)sourceAddress
+                                             sourcePort:(NSInteger)sourcePort
+                                            destination:(NSString *)destinationAddress
+                                        destinationPort:(NSInteger)destinationPort;
+
+@end

@@ -58,7 +58,7 @@ THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/Providers/AbuseIPDBProvider.m \
                       ThreatIntel/Providers/GreyNoiseProvider.m
 UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m UI/MenuBuilder+ThreatDisplay.m
-UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m Utils/ProcessLookup.m Utils/ProcessLookup_lsof.m Utils/SMAppServiceHelper.m Utils/SNBPrivilegedHelperClient.m Utils/SNBLocationStore.m
+UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m Utils/ProcessLookup.m Utils/ProcessLookup_lsof.m Utils/ProcessLookup_Native.m Utils/SMAppServiceHelper.m Utils/SNBPrivilegedHelperClient.m Utils/SNBLocationStore.m
 XPC_SOURCES = XPC/PacketInfo+Serialization.m XPC/ProcessInfo+Serialization.m XPC/NetworkDevice+Serialization.m
 
 # Test sources
@@ -166,6 +166,7 @@ tools: $(BUILD_DIR)/set_apikey $(BUILD_DIR)/remove_apikey $(BUILD_DIR)/list_apik
 # Test utilities
 test-threat-intel: $(BUILD_DIR)/test_threat_intel
 test-process-lookup: $(BUILD_DIR)/test_process_lookup
+test-native-lookup: $(BUILD_DIR)/test_native_lookup
 
 $(BUILD_DIR)/test_threat_intel: Tools/test_threat_intel.m $(BUILD_DIR)/Tests/ThreatIntel/MockThreatIntelProvider.o $(BUILD_DIR)/ThreatIntel/ThreatIntelFacade.o $(BUILD_DIR)/ThreatIntel/ThreatIntelModels.o $(BUILD_DIR)/ThreatIntel/ThreatIntelCache.o $(BUILD_DIR)/ThreatIntel/ThreatIntelProvider.o $(BUILD_DIR)/Utils/ExpiringCache.o $(BUILD_DIR)/Utils/Logger.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/IPAddressUtilities.o $(BUILD_DIR)/Config/KeychainManager.o | $(BUILD_DIR)
 	@echo "Building test_threat_intel tool..."
@@ -190,6 +191,23 @@ $(BUILD_DIR)/test_process_lookup: Tools/test_process_lookup.m $(BUILD_DIR)/Utils
 		$(BUILD_DIR)/Config/ConfigurationManager.o \
 		$(BUILD_DIR)/Config/KeychainManager.o \
 		-o $@ $(FRAMEWORKS)
+
+$(BUILD_DIR)/test_native_lookup: Tools/test_native_lookup.m $(BUILD_DIR)/Utils/ProcessLookup.o $(BUILD_DIR)/Utils/ProcessLookup_Native.o $(BUILD_DIR)/Utils/ProcessLookup_lsof.o $(BUILD_DIR)/Utils/SNBPrivilegedHelperClient.o $(BUILD_DIR)/XPC/ProcessInfo+Serialization.o $(BUILD_DIR)/XPC/PacketInfo+Serialization.o $(BUILD_DIR)/XPC/NetworkDevice+Serialization.o $(BUILD_DIR)/Models/PacketInfo.o $(BUILD_DIR)/Network/NetworkDevice.o $(BUILD_DIR)/Utils/Logger.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Config/KeychainManager.o | $(BUILD_DIR)
+	@echo "Building test_native_lookup tool..."
+	$(CC) $(OBJCFLAGS) $(SDK_FLAGS) $(PROJECT_INCLUDES) Tools/test_native_lookup.m \
+		$(BUILD_DIR)/Utils/ProcessLookup.o \
+		$(BUILD_DIR)/Utils/ProcessLookup_Native.o \
+		$(BUILD_DIR)/Utils/ProcessLookup_lsof.o \
+		$(BUILD_DIR)/Utils/SNBPrivilegedHelperClient.o \
+		$(BUILD_DIR)/XPC/ProcessInfo+Serialization.o \
+		$(BUILD_DIR)/XPC/PacketInfo+Serialization.o \
+		$(BUILD_DIR)/XPC/NetworkDevice+Serialization.o \
+		$(BUILD_DIR)/Models/PacketInfo.o \
+		$(BUILD_DIR)/Network/NetworkDevice.o \
+		$(BUILD_DIR)/Utils/Logger.o \
+		$(BUILD_DIR)/Config/ConfigurationManager.o \
+		$(BUILD_DIR)/Config/KeychainManager.o \
+		-o $@ $(FRAMEWORKS) $(PCAP_LIBDIR) $(PCAP_LIBS)
 
 $(BUILD_DIR)/set_apikey: Scripts/set_apikey.m $(BUILD_DIR)/Config/KeychainManager.o $(BUILD_DIR)/Config/ConfigurationManager.o $(BUILD_DIR)/Utils/Logger.o
 	@echo "Building set_apikey tool..."

@@ -530,7 +530,7 @@ static NSString *SNBLocationStoreDirectory(void) {
     "L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);"
     "var svg=document.createElementNS('http://www.w3.org/2000/svg','svg');"
     "svg.setAttribute('width','0');svg.setAttribute('height','0');"
-    "svg.innerHTML='<defs><marker id=\"arrowhead\" markerWidth=\"6\" markerHeight=\"6\" refX=\"5\" refY=\"2\" orient=\"auto\"><polygon points=\"0 0, 6 2, 0 4\" fill=\"%@\" opacity=\"0.7\"/></marker></defs>';"
+    "svg.innerHTML='<defs><marker id=\"arrowhead\" markerWidth=\"6\" markerHeight=\"6\" refX=\"5\" refY=\"2\" orient=\"auto\"><polygon points=\"0 0, 10 3, 0 6\" fill=\"%@\" opacity=\"0.7\"/></marker></defs>';"
     "document.body.appendChild(svg);"
     "var markers=[];var lines=[];var hasAutoFitted=false;"
     "function clearMarkers(){markers.forEach(function(m){map.removeLayer(m);});markers=[];}"
