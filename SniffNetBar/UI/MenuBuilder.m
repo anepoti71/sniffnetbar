@@ -1322,110 +1322,59 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     if (self.sectionNetworkDevicesExpanded) {
         if (!assetMonitorEnabled) {
-        NSMenuItem *disabledItem = [[NSMenuItem alloc] initWithTitle:@"✓ Asset Monitor: Off"
-                                                             action:nil
-                                                      keyEquivalent:@""];
-        disabledItem.enabled = NO;
-        [visualizationSubmenu addItem:disabledItem];
-    } else if (networkAssets.count == 0) {
-        NSMenuItem *emptyItem = [[NSMenuItem alloc] initWithTitle:@"⟳ Scanning network..."
-                                                          action:nil
-                                                   keyEquivalent:@""];
-        emptyItem.enabled = NO;
-        [visualizationSubmenu addItem:emptyItem];
-    } else {
-        // Show device count summary
-        NSString *newBadge = recentNewAssets.count > 0 ? [NSString stringWithFormat:@" (%lu new)", (unsigned long)recentNewAssets.count] : @"";
-        NSString *summaryStr = [NSString stringWithFormat:@"%lu Device%@%@",
-                               (unsigned long)networkAssets.count,
-                               networkAssets.count == 1 ? @"" : @"s",
-                               newBadge];
-        [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Total" value:summaryStr
-                                                             color:[NSColor labelColor]]];
-
-        // Always show new devices (important!)
-        if (recentNewAssets.count > 0) {
-            [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"New Devices" style:@"subheader"]];
-            NSUInteger limit = MIN(3, recentNewAssets.count);
-            for (NSUInteger i = 0; i < limit; i++) {
-                SNBNetworkAsset *asset = recentNewAssets[i];
-
-                // Build display name with hostname, vendor, and IP
-                NSString *line;
-                if (asset.hostname.length > 0 && asset.vendor.length > 0) {
-                    line = [NSString stringWithFormat:@"  🆕 %@ (%@)", asset.hostname, asset.vendor];
-                } else if (asset.hostname.length > 0) {
-                    line = [NSString stringWithFormat:@"  🆕 %@", asset.hostname];
-                } else if (asset.vendor.length > 0) {
-                    line = [NSString stringWithFormat:@"  🆕 %@ - %@", asset.vendor, asset.ipAddress];
-                } else {
-                    line = [NSString stringWithFormat:@"  🆕 %@", asset.ipAddress];
-                }
-
-                NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:line action:nil keyEquivalent:@""];
-                item.enabled = NO;
-                [visualizationSubmenu addItem:item];
-            }
-            if (recentNewAssets.count > limit) {
-                NSMenuItem *moreNewItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"  ... and %lu more new",
-                                                                            (unsigned long)(recentNewAssets.count - limit)]
-                                                                    action:nil
-                                                             keyEquivalent:@""];
-                moreNewItem.enabled = NO;
-                [visualizationSubmenu addItem:moreNewItem];
-            }
-        }
-
-        // Expandable all devices section
-        if (networkAssets.count > recentNewAssets.count) {
-            NSString *expandIndicator = self.showAllAssets ? @"▼" : @"▶";
-            NSUInteger knownCount = networkAssets.count - recentNewAssets.count;
-            NSString *allAssetsTitle = [NSString stringWithFormat:@"%@ Show %lu Known Device%@",
-                                       expandIndicator,
-                                       (unsigned long)knownCount,
-                                       knownCount == 1 ? @"" : @"s"];
-            NSMenuItem *assetsToggle = [[NSMenuItem alloc] initWithTitle:allAssetsTitle
-                                                                 action:@selector(toggleShowAllAssets)
+            NSMenuItem *disabledItem = [[NSMenuItem alloc] initWithTitle:@"✓ Asset Monitor: Off"
+                                                                 action:nil
                                                           keyEquivalent:@""];
-            assetsToggle.target = self;
-            [visualizationSubmenu addItem:assetsToggle];
+            disabledItem.enabled = NO;
+            [visualizationSubmenu addItem:disabledItem];
+        } else if (networkAssets.count == 0) {
+            NSMenuItem *emptyItem = [[NSMenuItem alloc] initWithTitle:@"⟳ Scanning network..."
+                                                              action:nil
+                                                       keyEquivalent:@""];
+            emptyItem.enabled = NO;
+            [visualizationSubmenu addItem:emptyItem];
+        } else {
+            // Show device count summary
+            NSString *newBadge = recentNewAssets.count > 0 ? [NSString stringWithFormat:@" (%lu new)", (unsigned long)recentNewAssets.count] : @"";
+            NSString *summaryStr = [NSString stringWithFormat:@"%lu Device%@%@",
+                                   (unsigned long)networkAssets.count,
+                                   networkAssets.count == 1 ? @"" : @"s",
+                                   newBadge];
+            [visualizationSubmenu addItem:[self styledStatItemWithLabel:@"Total" value:summaryStr
+                                                                 color:[NSColor labelColor]]];
 
-            if (self.showAllAssets) {
-                NSSet *newAssetIPs = [NSSet setWithArray:[recentNewAssets valueForKey:@"ipAddress"]];
-                NSMutableArray<SNBNetworkAsset *> *knownAssets = [NSMutableArray array];
-                for (SNBNetworkAsset *asset in networkAssets) {
-                    if (![newAssetIPs containsObject:asset.ipAddress]) {
-                        [knownAssets addObject:asset];
-                    }
-                }
-
-                NSUInteger limit = MIN(10, knownAssets.count);
+            // Always show new devices (important!)
+            if (recentNewAssets.count > 0) {
+                [visualizationSubmenu addItem:[self styledMenuItemWithTitle:@"New Devices" style:@"subheader"]];
+                NSUInteger limit = MIN(3, recentNewAssets.count);
                 for (NSUInteger i = 0; i < limit; i++) {
-                    SNBNetworkAsset *asset = knownAssets[i];
+                    SNBNetworkAsset *asset = recentNewAssets[i];
+
+                    // Build display name with hostname, vendor, and IP
                     NSString *line;
                     if (asset.hostname.length > 0 && asset.vendor.length > 0) {
-                        line = [NSString stringWithFormat:@"  %@ (%@)", asset.hostname, asset.vendor];
+                        line = [NSString stringWithFormat:@"  🆕 %@ (%@)", asset.hostname, asset.vendor];
                     } else if (asset.hostname.length > 0) {
-                        line = [NSString stringWithFormat:@"  %@", asset.hostname];
+                        line = [NSString stringWithFormat:@"  🆕 %@", asset.hostname];
                     } else if (asset.vendor.length > 0) {
-                        line = [NSString stringWithFormat:@"  %@ - %@", asset.vendor, asset.ipAddress];
+                        line = [NSString stringWithFormat:@"  🆕 %@ - %@", asset.vendor, asset.ipAddress];
                     } else {
-                        line = [NSString stringWithFormat:@"  %@", asset.ipAddress];
+                        line = [NSString stringWithFormat:@"  🆕 %@", asset.ipAddress];
                     }
-                    NSMenuItem *assetItem = [[NSMenuItem alloc] initWithTitle:line action:nil keyEquivalent:@""];
-                    assetItem.enabled = NO;
-                    [visualizationSubmenu addItem:assetItem];
+
+                    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:line action:nil keyEquivalent:@""];
+                    item.enabled = NO;
+                    [visualizationSubmenu addItem:item];
                 }
-                if (knownAssets.count > limit) {
-                    NSMenuItem *moreItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"  ... and %lu more",
-                                                                             (unsigned long)(knownAssets.count - limit)]
-                                                                     action:nil
-                                                              keyEquivalent:@""];
-                    moreItem.enabled = NO;
-                    [visualizationSubmenu addItem:moreItem];
+                if (recentNewAssets.count > limit) {
+                    NSMenuItem *moreNewItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"  ... and %lu more new",
+                                                                                (unsigned long)(recentNewAssets.count - limit)]
+                                                                        action:nil
+                                                                 keyEquivalent:@""];
+                    moreNewItem.enabled = NO;
+                    [visualizationSubmenu addItem:moreNewItem];
                 }
             }
-        }
         }
     }
 
