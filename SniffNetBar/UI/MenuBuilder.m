@@ -602,8 +602,8 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     item.target = target;
     item.enabled = YES;
 
-    NSFont *font = [NSFont boldSystemFontOfSize:13.0];
-    NSColor *color = [NSColor secondaryLabelColor];
+    NSFont *font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold];
+    NSColor *color = [NSColor labelColor];
 
     NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:fullTitle];
     [attrString addAttribute:NSFontAttributeName value:font range:NSMakeRange(0, fullTitle.length)];
@@ -621,19 +621,15 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     NSColor *color;
 
     if ([style isEqualToString:@"header"]) {
-        // Bold header style
-        font = [NSFont boldSystemFontOfSize:13.0];
+        font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold];
         color = [NSColor labelColor];
     } else if ([style isEqualToString:@"subheader"]) {
-        // Medium weight subheader
-        font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold];
+        font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium];
         color = [NSColor secondaryLabelColor];
     } else if ([style isEqualToString:@"data"]) {
-        // Monospaced for data
         font = [NSFont monospacedSystemFontOfSize:11.0 weight:NSFontWeightRegular];
-        color = [NSColor labelColor];
+        color = [NSColor secondaryLabelColor];
     } else {
-        // Default
         font = [NSFont menuFontOfSize:0.0];
         color = [NSColor labelColor];
     }
@@ -681,15 +677,16 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         [attrString appendAttributedString:dot];
         if (icon.length > 0) {
             NSString *badgeText = [NSString stringWithFormat:@"[%@] ", [icon uppercaseString]];
+            NSColor *badgeColor = [NSColor secondaryLabelColor];
             NSAttributedString *badge = [[NSAttributedString alloc] initWithString:badgeText
                 attributes:@{NSFontAttributeName: markerFont,
-                             NSForegroundColorAttributeName: [NSColor secondaryLabelColor]}];
+                             NSForegroundColorAttributeName: badgeColor}];
             [attrString appendAttributedString:badge];
         }
     }
 
     NSFont *labelFont = [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
-    NSColor *labelTextColor = highlightText ? markerColor : [NSColor secondaryLabelColor];
+    NSColor *labelTextColor = [NSColor labelColor];
     NSAttributedString *labelAttr = [[NSAttributedString alloc] initWithString:label
         attributes:@{NSFontAttributeName: labelFont,
                      NSForegroundColorAttributeName: labelTextColor}];
@@ -698,7 +695,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     if (value.length > 0) {
         NSString *valueText = [NSString stringWithFormat:@"  %@", value];
         NSFont *valueFont = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightSemibold];
-        NSColor *valueTextColor = highlightText ? markerColor : [NSColor labelColor];
+        NSColor *valueTextColor = [NSColor secondaryLabelColor];
         NSAttributedString *valueAttr = [[NSAttributedString alloc] initWithString:valueText
             attributes:@{NSFontAttributeName: valueFont,
                          NSForegroundColorAttributeName: valueTextColor}];
@@ -840,6 +837,9 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
 - (NSColor *)highlightColorForHostAddress:(NSString *)address {
     NSColor *color = self.hostColorMap[address];
+    if (!color) {
+        color = [[SNBBadgeRegistry sharedRegistry] colorForLabel:address createIfMissing:YES];
+    }
     return color ?: [NSColor labelColor];
 }
 

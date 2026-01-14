@@ -387,7 +387,10 @@ static NSString *SNBLocationStoreDirectory(void) {
                 if (!badge) {
                     NSString *label = payload[@"name"] ?: ip;
                     NSString *icon = [[SNBBadgeRegistry sharedRegistry] badgeIconForLabel:label fallback:ip];
-                    badge = @{@"icon": icon ?: @"", @"color": @"#94a3b8"};
+                    NSColor *badgeColor = [[SNBBadgeRegistry sharedRegistry] colorForLabel:label
+                                                                 createIfMissing:YES];
+                    NSString *colorHex = [self hexStringForColor:badgeColor];
+                    badge = @{@"icon": icon ?: @"", @"color": colorHex};
                 }
                 [badges addObject:badge];
             }
@@ -676,21 +679,25 @@ static NSString *SNBLocationStoreDirectory(void) {
         return;
     }
     BOOL hasProcessInfo = connection.processName.length > 0 || connection.processPID != 0;
-    NSColor *color = [[SNBBadgeRegistry sharedRegistry] colorForProcessName:connection.processName
-                                                                        pid:connection.processPID
-                                                       createIfMissing:hasProcessInfo];
+    NSColor *color;
+    if (hasProcessInfo) {
+        color = [[SNBBadgeRegistry sharedRegistry] colorForProcessName:connection.processName
+                                                                   pid:connection.processPID
+                                                  createIfMissing:YES];
+    } else {
+        color = [[SNBBadgeRegistry sharedRegistry] colorForLabel:address
+                                                 createIfMissing:YES];
+    }
     NSString *icon = [[SNBBadgeRegistry sharedRegistry] badgeIconForProcessName:connection.processName
                                                                              pid:connection.processPID
                                                                   fallbackLabel:address];
-    NSString *colorHex = [self hexStringForColor:color ?: [NSColor labelColor]];
+    NSString *colorHex = [self hexStringForColor:color];
     map[address] = @{@"icon": icon ?: @"", @"color": colorHex};
 }
 
 - (NSString *)hexStringForColor:(NSColor *)color {
-    NSColor *rgbColor = [color colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
-    if (!rgbColor || ![rgbColor respondsToSelector:@selector(getRed:green:blue:alpha:)]) {
-        return @"#2563eb";
-    }
+    NSColor *rgbColor = (color ?: [NSColor labelColor]);
+    rgbColor = [rgbColor colorUsingColorSpace:[NSColorSpace sRGBColorSpace]] ?: [NSColor labelColor];
     CGFloat red = 0, green = 0, blue = 0, alpha = 0;
     [rgbColor getRed:&red green:&green blue:&blue alpha:&alpha];
     return [NSString stringWithFormat:@"#%02lX%02lX%02lX",

@@ -15,6 +15,10 @@ NS_ASSUME_NONNULL_BEGIN
                               pid:(pid_t)pid
              createIfMissing:(BOOL)create;
 
+/// Returns a color derived from a label (e.g. host or location) using the shared palette.
+- (NSColor *)colorForLabel:(NSString *)label
+            createIfMissing:(BOOL)create;
+
 /// Returns an icon string (initial or fallback token) for the process or label.
 - (NSString *)badgeIconForProcessName:(NSString *)processName
                                    pid:(pid_t)pid

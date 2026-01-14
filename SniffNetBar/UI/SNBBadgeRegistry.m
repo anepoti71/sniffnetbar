@@ -1,5 +1,15 @@
 #import "SNBBadgeRegistry.h"
 
+static NSString *SNBBadgeKeyForProcess(NSString *name, pid_t pid) {
+    NSString *processName = name.length > 0 ? name : @"<unknown>";
+    return [NSString stringWithFormat:@"process:%@|%d", processName, (int)pid];
+}
+
+static NSString *SNBBadgeKeyForLabel(NSString *label) {
+    NSString *source = label.length > 0 ? label : @"<unknown>";
+    return [NSString stringWithFormat:@"label:%@", source];
+}
+
 static NSArray<NSColor *> *SNBBadgeColorPalette(void) {
     static NSArray<NSColor *> *palette = nil;
     static dispatch_once_t onceToken;
@@ -42,18 +52,10 @@ static NSArray<NSColor *> *SNBBadgeColorPalette(void) {
     return self;
 }
 
-- (NSString *)processKeyForName:(NSString *)name pid:(pid_t)pid {
-    NSString *processName = name.length > 0 ? name : @"<unknown>";
-    return [NSString stringWithFormat:@"%@|%d", processName, (int)pid];
-}
-
-- (NSColor *)colorForProcessName:(NSString *)processName
-                              pid:(pid_t)pid
-              createIfMissing:(BOOL)create {
-    if (processName.length == 0 && pid == 0) {
-        return [NSColor colorWithCalibratedRed:0.56 green:0.58 blue:0.62 alpha:1.0];
+- (NSColor *)colorForKey:(NSString *)key createIfMissing:(BOOL)create {
+    if (key.length == 0) {
+        return [NSColor labelColor];
     }
-    NSString *key = [self processKeyForName:processName pid:pid];
     NSColor *color = self.colorMap[key];
     if (!color && create && self.palette.count > 0) {
         color = self.palette[self.nextColorIndex % self.palette.count];
@@ -61,6 +63,19 @@ static NSArray<NSColor *> *SNBBadgeColorPalette(void) {
         self.colorMap[key] = color;
     }
     return color ?: [NSColor labelColor];
+}
+
+- (NSColor *)colorForProcessName:(NSString *)processName
+                              pid:(pid_t)pid
+              createIfMissing:(BOOL)create {
+    NSString *key = SNBBadgeKeyForProcess(processName, pid);
+    return [self colorForKey:key createIfMissing:create];
+}
+
+- (NSColor *)colorForLabel:(NSString *)label
+            createIfMissing:(BOOL)create {
+    NSString *key = SNBBadgeKeyForLabel(label);
+    return [self colorForKey:key createIfMissing:create];
 }
 
 - (NSString *)badgeIconForProcessName:(NSString *)processName
