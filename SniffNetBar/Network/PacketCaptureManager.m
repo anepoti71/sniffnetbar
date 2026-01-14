@@ -16,6 +16,7 @@
 @property (nonatomic, assign) BOOL isCapturing;
 @property (nonatomic, strong) dispatch_queue_t captureQueue;
 @property (nonatomic, strong, readwrite) NSString *currentDeviceName;
+@property (nonatomic, strong, readwrite) NSDate *captureStartDate;
 @property (nonatomic, strong) NSString *sessionID;
 @property (nonatomic, strong) NSTimer *pollingTimer;
 @property (nonatomic, strong) ConfigurationManager *configuration;
@@ -111,6 +112,7 @@
     self.sessionID = newSessionID;
     self.currentDeviceName = deviceName;
     self.isCapturing = YES;
+    self.captureStartDate = [NSDate date];
 
     SNBLogInfo("Capture started with session ID: %{public}@", self.sessionID);
     [self startPollingForPackets];
@@ -123,6 +125,7 @@
     }
 
     self.isCapturing = NO;
+    self.captureStartDate = nil;
 
     [self.pollingTimer invalidate];
     self.pollingTimer = nil;

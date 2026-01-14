@@ -12,6 +12,7 @@
 #import "IPAddressUtilities.h"
 #import "UserDefaultsKeys.h"
 #import "SNBLocationStore.h"
+#import "SNBBadgeRegistry.h"
 #import "Logger.h"
 #import <WebKit/WebKit.h>
 #import <CoreLocation/CoreLocation.h>
@@ -306,6 +307,12 @@ static NSString *SNBLocationStoreDirectory(void) {
         }
     }
 
+    NSMutableDictionary<NSString *, NSDictionary *> *badgeInfoByIP = [NSMutableDictionary dictionary];
+    for (ConnectionTraffic *connection in connections) {
+        [self addBadgeInfoForIPAddress:connection.sourceAddress connection:connection map:badgeInfoByIP];
+        [self addBadgeInfoForIPAddress:connection.destinationAddress connection:connection map:badgeInfoByIP];
+    }
+
     NSInteger maxLines = MIN(config.maxConnectionLinesToShow, connections.count);
     for (NSInteger i = 0; i < maxLines; i++) {
         ConnectionTraffic *connection = connections[i];
@@ -373,6 +380,18 @@ static NSString *SNBLocationStoreDirectory(void) {
             pointData[@"names"] = [group valueForKey:@"name"];
             pointData[@"isps"] = [group valueForKey:@"isp"];
             pointData[@"locationName"] = firstPoint[@"name"] ?: @"";
+            NSMutableArray<NSDictionary *> *badges = [NSMutableArray array];
+            for (NSDictionary *payload in group) {
+                NSString *ip = payload[@"ip"];
+                NSDictionary *badge = badgeInfoByIP[ip];
+                if (!badge) {
+                    NSString *label = payload[@"name"] ?: ip;
+                    NSString *icon = [[SNBBadgeRegistry sharedRegistry] badgeIconForLabel:label fallback:ip];
+                    badge = @{@"icon": icon ?: @"", @"color": @"#94a3b8"};
+                }
+                [badges addObject:badge];
+            }
+            pointData[@"badgeInfos"] = badges;
             if (group.count > 1) {
                 pointData[@"isDuplicate"] = @YES;
                 pointData[@"color"] = @"#ffad60";
@@ -501,6 +520,11 @@ static NSString *SNBLocationStoreDirectory(void) {
     ".leaflet-popup-content .ip-list li:last-child{border-bottom:none;padding-bottom:0;}"
     ".leaflet-popup-content .ip-address{color:#0f172a;font-weight:500;font-size:13px;display:block;margin-bottom:2px;font-family:Monaco,Consolas,monospace;}"
     ".leaflet-popup-content .ip-company{color:#64748b;font-size:12px;display:block;}"
+    ".leaflet-popup-content .ip-item{display:flex;align-items:flex-start;gap:8px;font-size:13px;}"
+    ".leaflet-popup-content .ip-badge{display:flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid currentColor;border-radius:999px;font-size:11px;font-weight:600;text-transform:uppercase;box-shadow:0 1px 3px rgba(15,23,42,0.1);}"
+    ".leaflet-popup-content .ip-badge-dot{width:6px;height:6px;border-radius:50%;display:inline-block;}"
+    ".leaflet-popup-content .ip-badge-icon{line-height:1;}"
+    ".leaflet-popup-content .ip-text{flex:1;display:flex;flex-direction:column;gap:2px;}"
     ".cluster-marker{background:linear-gradient(135deg,#ef4444 0%%,#dc2626 100%%);"
     "border:3px solid #ffffff;border-radius:50%%;box-shadow:0 3px 12px rgba(239,68,68,0.4),"
     "0 0 0 4px rgba(239,68,68,0.15);display:flex;align-items:center;justify-content:center;"
@@ -571,12 +595,24 @@ static NSString *SNBLocationStoreDirectory(void) {
     "  popupContent+='<ul class=\"ip-list\">';"
     "  p.ips.forEach(function(ip,idx){"
     "    var isp=p.isps&&p.isps[idx]?p.isps[idx]:'';"
-    "    popupContent+='<li>';"
+    "    var badge=p.badgeInfos&&p.badgeInfos[idx]?p.badgeInfos[idx]:null;"
+    "    var badgeMarkup='';"
+    "    if(badge){"
+    "      var color=badge.color||'#94a3b8';"
+    "      var icon=badge.icon||'';"
+    "      badgeMarkup='<span class=\"ip-badge\" style=\"border-color:'+color+';color:'+color+';\">';"
+    "      badgeMarkup+='<span class=\"ip-badge-dot\" style=\"background:'+color+'\"></span>';"
+    "      badgeMarkup+='<span class=\"ip-badge-icon\">'+icon+'</span>';"
+    "      badgeMarkup+='</span>';"
+    "    }"
+    "    popupContent+='<li class=\"ip-item\">';"
+    "    popupContent+=badgeMarkup;"
+    "    popupContent+='<span class=\"ip-text\">';"
     "    popupContent+='<span class=\"ip-address\">'+ip+'</span>';"
     "    if(isp&&isp.length>0){"
     "      popupContent+='<span class=\"ip-company\">'+isp+'</span>';"
     "    }"
-    "    popupContent+='</li>';"
+    "    popupContent+='</span></li>';"
     "  });"
     "  popupContent+='</ul>';"
     "}else if(p.title){"
@@ -627,6 +663,40 @@ static NSString *SNBLocationStoreDirectory(void) {
     "window.SniffNetBar={setMarkers:setMarkers,zoomIn:zoomIn,zoomOut:zoomOut,resetView:resetView};"
     "</script></body></html>", lineColor, (long)lineWeight, lineColor, lineOpacity];
     [self.webView loadHTMLString:html baseURL:nil];
+}
+
+// Helper badge generation
+- (void)addBadgeInfoForIPAddress:(NSString *)address
+                    connection:(ConnectionTraffic *)connection
+                          map:(NSMutableDictionary<NSString *, NSDictionary *> *)map {
+    if (!address.length || !map) {
+        return;
+    }
+    if (map[address]) {
+        return;
+    }
+    BOOL hasProcessInfo = connection.processName.length > 0 || connection.processPID != 0;
+    NSColor *color = [[SNBBadgeRegistry sharedRegistry] colorForProcessName:connection.processName
+                                                                        pid:connection.processPID
+                                                       createIfMissing:hasProcessInfo];
+    NSString *icon = [[SNBBadgeRegistry sharedRegistry] badgeIconForProcessName:connection.processName
+                                                                             pid:connection.processPID
+                                                                  fallbackLabel:address];
+    NSString *colorHex = [self hexStringForColor:color ?: [NSColor labelColor]];
+    map[address] = @{@"icon": icon ?: @"", @"color": colorHex};
+}
+
+- (NSString *)hexStringForColor:(NSColor *)color {
+    NSColor *rgbColor = [color colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+    if (!rgbColor || ![rgbColor respondsToSelector:@selector(getRed:green:blue:alpha:)]) {
+        return @"#2563eb";
+    }
+    CGFloat red = 0, green = 0, blue = 0, alpha = 0;
+    [rgbColor getRed:&red green:&green blue:&blue alpha:&alpha];
+    return [NSString stringWithFormat:@"#%02lX%02lX%02lX",
+            (long)(red * 255.0),
+            (long)(green * 255.0),
+            (long)(blue * 255.0)];
 }
 
 - (NSButton *)zoomButtonWithTitle:(NSString *)title action:(SEL)action {

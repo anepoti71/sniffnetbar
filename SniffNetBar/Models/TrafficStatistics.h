@@ -6,6 +6,7 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <sys/types.h>
 
 @class PacketInfo, TrafficStats, HostTraffic, ConnectionTraffic;
 
@@ -19,6 +20,8 @@
 
 @end
 
+@class ProcessTrafficSummary;
+
 @interface TrafficStats : NSObject
 
 @property (nonatomic, assign) uint64_t totalBytes;
@@ -29,6 +32,7 @@
 @property (nonatomic, strong) NSArray<HostTraffic *> *topHosts;
 @property (nonatomic, strong) NSArray<ConnectionTraffic *> *topConnections;
 @property (nonatomic, strong) NSSet<NSString *> *allActiveDestinationIPs;
+@property (nonatomic, strong) NSArray<ProcessTrafficSummary *> *processSummaries;
 
 @end
 
@@ -51,5 +55,15 @@
 @property (nonatomic, assign) NSInteger packetCount;
 @property (nonatomic, strong, nullable) NSString *processName;
 @property (nonatomic, assign) pid_t processPID;
+
+@end
+
+@interface ProcessTrafficSummary : NSObject
+
+@property (nonatomic, copy) NSString *processName;
+@property (nonatomic, assign) pid_t processPID;
+@property (nonatomic, assign) uint64_t bytes;
+@property (nonatomic, assign) NSUInteger connectionCount;
+@property (nonatomic, strong) NSArray<NSString *> *destinations;
 
 @end

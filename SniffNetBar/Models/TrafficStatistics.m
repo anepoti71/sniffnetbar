@@ -133,6 +133,38 @@ static NSString * const kDNSLookupFailedMarker = @"__DNS_FAILED__";
 
 @end
 
+@interface ProcessTrafficSummary ()
+@property (nonatomic, strong) NSMutableOrderedSet<NSString *> *mutableDestinations;
+@end
+
+@implementation ProcessTrafficSummary
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _mutableDestinations = [NSMutableOrderedSet orderedSet];
+    }
+    return self;
+}
+
+- (void)addDestination:(NSString *)destination {
+    if (destination.length > 0) {
+        [self.mutableDestinations addObject:destination];
+    }
+}
+
+- (void)finalizeDestinations {
+    NSArray<NSString *> *destinations = [self.mutableDestinations array];
+    if (destinations.count > 0) {
+        self.destinations = [destinations sortedArrayUsingSelector:@selector(compare:)];
+    } else {
+        self.destinations = @[];
+    }
+    self.mutableDestinations = nil;
+}
+
+@end
+
 typedef NS_ENUM(NSUInteger, SNBProcessLookupSource) {
     SNBProcessLookupSourceHelper,
     SNBProcessLookupSourceLsof
@@ -886,6 +918,54 @@ static NSString *SNBResolveHostname(NSString *address,
     return [top copy];
 }
 
+- (NSArray<ProcessTrafficSummary *> *)processSummariesFromConnections:(NSArray<ConnectionTraffic *> *)connections
+                                                               limit:(NSUInteger)limit {
+    if (limit == 0 || connections.count == 0) {
+        return @[];
+    }
+
+    NSMutableDictionary<NSString *, ProcessTrafficSummary *> *summariesDict = [NSMutableDictionary dictionary];
+    for (ConnectionTraffic *connection in connections) {
+        NSString *processName = connection.processName.length > 0 ? connection.processName : @"<unknown>";
+        pid_t pid = connection.processPID;
+        NSString *key = [NSString stringWithFormat:@"%@|%d", processName, (int)pid];
+        ProcessTrafficSummary *summary = summariesDict[key];
+        if (!summary) {
+            summary = [[ProcessTrafficSummary alloc] init];
+            summary.processName = processName;
+            summary.processPID = pid;
+            summariesDict[key] = summary;
+        }
+        summary.bytes += connection.bytes;
+        summary.connectionCount += 1;
+        if (connection.destinationAddress.length > 0) {
+            [summary addDestination:connection.destinationAddress];
+        }
+    }
+
+    NSMutableArray<ProcessTrafficSummary *> *summaries = [NSMutableArray arrayWithCapacity:summariesDict.count];
+    for (ProcessTrafficSummary *summary in summariesDict.allValues) {
+        [summary finalizeDestinations];
+        [summaries addObject:summary];
+    }
+
+    [summaries sortUsingComparator:^NSComparisonResult(ProcessTrafficSummary *obj1, ProcessTrafficSummary *obj2) {
+        if (obj1.bytes > obj2.bytes) {
+            return NSOrderedAscending;
+        }
+        if (obj1.bytes < obj2.bytes) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+
+    if (summaries.count > limit) {
+        [summaries removeObjectsInRange:NSMakeRange(limit, summaries.count - limit)];
+    }
+
+    return [summaries copy];
+}
+
 - (TrafficStats *)currentStatsLocked {
     TrafficStats *stats = [[TrafficStats alloc] init];
     stats.totalBytes = self.totalBytes;
@@ -894,9 +974,9 @@ static NSString *SNBResolveHostname(NSString *address,
     stats.totalPackets = self.totalPackets;
     stats.bytesPerSecond = self.cachedBytesPerSecond;
 
+    ConfigurationManager *config = [ConfigurationManager sharedManager];
     // Use cached results if available and cache is clean
     if (self.statsCacheDirty || !self.cachedTopHosts || !self.cachedTopConnections) {
-        ConfigurationManager *config = [ConfigurationManager sharedManager];
         NSUInteger hostLimit = MAX(1, config.maxTopHostsToShow);
         NSUInteger connectionLimit = MAX(1, config.maxTopConnectionsToShow);
 
@@ -907,6 +987,8 @@ static NSString *SNBResolveHostname(NSString *address,
 
     stats.topHosts = self.cachedTopHosts;
     stats.topConnections = self.cachedTopConnections;
+    NSUInteger processLimit = MAX(1, config.maxTopConnectionsToShow);
+    stats.processSummaries = [self processSummariesFromConnections:self.connectionStats.allValues limit:processLimit];
 
     // Collect ALL active destination IPs (not just from top connections) for threat intel
     NSMutableSet<NSString *> *allDestIPs = [NSMutableSet set];

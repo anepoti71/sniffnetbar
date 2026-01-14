@@ -40,6 +40,7 @@
 @property (nonatomic, assign) BOOL menuRefreshPending;
 @property (nonatomic, strong) SNBNetworkAssetMonitor *assetMonitor;
 @property (nonatomic, strong) SNBStatisticsHistory *statisticsHistory;
+@property (nonatomic, strong) NSDate *captureWindowStartDate;
 @end
 
 @implementation AppCoordinator
@@ -79,6 +80,14 @@
         };
     }
     return self;
+}
+
+- (void)syncCaptureStartDateForMenuBuilder {
+    NSDate *packetStart = self.deviceManager.packetManager.captureStartDate;
+    if (packetStart && (!self.captureWindowStartDate || [packetStart compare:self.captureWindowStartDate] == NSOrderedDescending)) {
+        self.captureWindowStartDate = packetStart;
+    }
+    self.menuBuilder.captureStartDate = self.captureWindowStartDate;
 }
 
 - (void)start {
@@ -184,6 +193,7 @@
         // Proactively enrich IPs for threat intel (regardless of menu state)
         [strongSelf enrichStatsForThreatIntel:stats];
 
+        [strongSelf syncCaptureStartDateForMenuBuilder];
         [strongSelf.menuBuilder updateStatusWithStats:stats selectedDevice:strongSelf.deviceManager.selectedDevice];
         if (strongSelf.menuBuilder.menuIsOpen) {
             [strongSelf.menuBuilder refreshVisualizationWithStats:stats
@@ -235,6 +245,7 @@
 }
 
 - (void)updateMenuWithStats:(TrafficStats *)stats {
+    [self syncCaptureStartDateForMenuBuilder];
     self.menuBuilder.dailyStatsEnabled = self.statisticsHistory.isEnabled;
     self.menuBuilder.statsReportAvailable = [self.statisticsHistory reportExists];
 
@@ -272,6 +283,11 @@
 - (void)toggleShowMap:(NSMenuItem *)sender {
     self.menuBuilder.showMap = !self.menuBuilder.showMap;
     SNBLogInfo("Map visualization toggled: %{public}@", self.menuBuilder.showMap ? @"ON" : @"OFF");
+    [self updateMenu];
+}
+
+- (void)toggleShowProcessActivity:(NSMenuItem *)sender {
+    self.menuBuilder.showProcessActivity = !self.menuBuilder.showProcessActivity;
     [self updateMenu];
 }
 
@@ -319,6 +335,8 @@
 
 - (void)resetStatistics:(NSMenuItem *)sender {
     [self.statistics reset];
+    self.captureWindowStartDate = [NSDate date];
+    self.menuBuilder.captureStartDate = self.captureWindowStartDate;
     [self updateMenu];
 }
 

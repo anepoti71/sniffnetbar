@@ -17,6 +17,7 @@
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 #import "Logger.h"
+#import "SNBBadgeRegistry.h"
 
 static NSString *SNBStoredDeviceName(void) {
     NSString *storedName = [[NSUserDefaults standardUserDefaults] stringForKey:SNBUserDefaultsKeySelectedNetworkDevice];
@@ -77,6 +78,11 @@ static NSString *SNBStoredDeviceName(void) {
 @property (nonatomic, strong) NSMenuItem *cleanConnectionsHeader;
 @property (nonatomic, strong) NSMenuItem *cleanConnectionsSeparator;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary<NSString *, id> *> *detailStatItemInfo;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSColor *> *hostColorMap;
+@property (nonatomic, strong) NSMenuItem *processActivityHeader;
+@property (nonatomic, strong) NSMenuItem *processActivitySeparator;
+@property (nonatomic, strong) NSMutableArray<NSMenuItem *> *processActivityItems;
+@property (nonatomic, strong) NSDateFormatter *captureDateFormatter;
 
 // Section tracking for in-place updates
 @property (nonatomic, strong) NSMenuItem *networkActivitySectionHeader;
@@ -104,6 +110,7 @@ static NSString * const SNBMenuItemKeyDetailIncoming = @"detailIncoming";
 static NSString * const SNBMenuItemKeyDetailOutgoing = @"detailOutgoing";
 static NSString * const SNBMenuItemKeyDetailTotal = @"detailTotal";
 static NSString * const SNBMenuItemKeyDetailPackets = @"detailPackets";
+static NSString * const SNBMenuItemKeyCaptureStart = @"detailCaptureStart";
 
 static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     static NSSet<NSString *> *cached = nil;
@@ -156,6 +163,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         _cachedMenuItems = [NSMutableDictionary dictionary];
         _dynamicStatItemInfo = [NSMutableDictionary dictionary];
         _detailStatItemInfo = [NSMutableDictionary dictionary];
+        _hostColorMap = [NSMutableDictionary dictionary];
         _needsFullVisualizationRefresh = NO;
         _menuStructureBuilt = NO;
 
@@ -186,6 +194,12 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
             _showMap = NO;
         }
 
+        if ([defaults objectForKey:SNBUserDefaultsKeyShowProcessActivity]) {
+            _showProcessActivity = [defaults boolForKey:SNBUserDefaultsKeyShowProcessActivity];
+        } else {
+            _showProcessActivity = YES;
+        }
+
         if ([defaults objectForKey:SNBUserDefaultsKeyDailyStatisticsEnabled]) {
             _dailyStatsEnabled = [defaults boolForKey:SNBUserDefaultsKeyDailyStatisticsEnabled];
         } else {
@@ -194,6 +208,10 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
         NSString *savedProvider = [defaults stringForKey:SNBUserDefaultsKeyMapProvider];
         _mapProviderName = savedProvider.length > 0 ? savedProvider : configuration.defaultMapProvider;
+        _captureDateFormatter = [[NSDateFormatter alloc] init];
+        _captureDateFormatter.dateStyle = NSDateFormatterShortStyle;
+        _captureDateFormatter.timeStyle = NSDateFormatterShortStyle;
+        _captureDateFormatter.doesRelativeDateFormatting = YES;
 
         // Load section expansion states (default: all expanded)
         if ([defaults objectForKey:SNBUserDefaultsKeySectionThreatsExpanded]) {
@@ -226,12 +244,18 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
             _sectionTopConnectionsExpanded = YES;
         }
 
-        if ([defaults objectForKey:SNBUserDefaultsKeySectionNetworkAssetsExpanded]) {
-            _sectionNetworkAssetsExpanded = [defaults boolForKey:SNBUserDefaultsKeySectionNetworkAssetsExpanded];
-        } else {
-            _sectionNetworkAssetsExpanded = YES;
-        }
+    if ([defaults objectForKey:SNBUserDefaultsKeySectionNetworkAssetsExpanded]) {
+        _sectionNetworkAssetsExpanded = [defaults boolForKey:SNBUserDefaultsKeySectionNetworkAssetsExpanded];
+    } else {
+        _sectionNetworkAssetsExpanded = YES;
     }
+
+    if ([defaults objectForKey:SNBUserDefaultsKeySectionProcessActivityExpanded]) {
+        _sectionProcessActivityExpanded = [defaults boolForKey:SNBUserDefaultsKeySectionProcessActivityExpanded];
+    } else {
+        _sectionProcessActivityExpanded = YES;
+    }
+}
     return self;
 }
 
@@ -255,6 +279,13 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     if (_showMap != showMap) {
         _showMap = showMap;
         [[NSUserDefaults standardUserDefaults] setBool:showMap forKey:SNBUserDefaultsKeyShowMap];
+    }
+}
+
+- (void)setShowProcessActivity:(BOOL)showProcessActivity {
+    if (_showProcessActivity != showProcessActivity) {
+        _showProcessActivity = showProcessActivity;
+        [[NSUserDefaults standardUserDefaults] setBool:showProcessActivity forKey:SNBUserDefaultsKeyShowProcessActivity];
     }
 }
 
@@ -304,6 +335,13 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     if (_sectionNetworkAssetsExpanded != sectionNetworkAssetsExpanded) {
         _sectionNetworkAssetsExpanded = sectionNetworkAssetsExpanded;
         [[NSUserDefaults standardUserDefaults] setBool:sectionNetworkAssetsExpanded forKey:SNBUserDefaultsKeySectionNetworkAssetsExpanded];
+    }
+}
+
+- (void)setSectionProcessActivityExpanded:(BOOL)sectionProcessActivityExpanded {
+    if (_sectionProcessActivityExpanded != sectionProcessActivityExpanded) {
+        _sectionProcessActivityExpanded = sectionProcessActivityExpanded;
+        [[NSUserDefaults standardUserDefaults] setBool:sectionProcessActivityExpanded forKey:SNBUserDefaultsKeySectionProcessActivityExpanded];
     }
 }
 
@@ -608,32 +646,101 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     return item;
 }
 
-- (void)configureStatItem:(NSMenuItem *)item label:(NSString *)label value:(NSString *)value color:(NSColor *)color {
+- (void)configureStatItem:(NSMenuItem *)item
+                    label:(NSString *)label
+                    value:(NSString *)value
+                    color:(NSColor *)color {
+    [self configureStatItem:item label:label value:value color:color icon:nil showBadge:NO];
+}
+
+- (void)configureStatItem:(NSMenuItem *)item
+                    label:(NSString *)label
+                    value:(NSString *)value
+                    color:(NSColor *)color
+                     icon:(NSString *)icon {
+    [self configureStatItem:item label:label value:value color:color icon:icon showBadge:NO];
+}
+
+- (void)configureStatItem:(NSMenuItem *)item
+                    label:(NSString *)label
+                    value:(NSString *)value
+                    color:(NSColor *)color
+                     icon:(NSString *)icon
+                showBadge:(BOOL)showBadge
+            highlightText:(BOOL)highlightText {
     if (!item || label.length == 0) {
         return;
     }
-    NSString *fullText = [NSString stringWithFormat:@"%@  %@", label, value ?: @""];
-    item.title = fullText;
-    NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString:fullText];
+    NSColor *markerColor = color ?: [NSColor labelColor];
+    NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] init];
+
+    if (showBadge && markerColor) {
+        NSFont *markerFont = [NSFont systemFontOfSize:10.0 weight:NSFontWeightSemibold];
+        NSAttributedString *dot = [[NSAttributedString alloc] initWithString:@"● "
+            attributes:@{NSFontAttributeName: markerFont, NSForegroundColorAttributeName: markerColor}];
+        [attrString appendAttributedString:dot];
+        if (icon.length > 0) {
+            NSString *badgeText = [NSString stringWithFormat:@"[%@] ", [icon uppercaseString]];
+            NSAttributedString *badge = [[NSAttributedString alloc] initWithString:badgeText
+                attributes:@{NSFontAttributeName: markerFont,
+                             NSForegroundColorAttributeName: [NSColor secondaryLabelColor]}];
+            [attrString appendAttributedString:badge];
+        }
+    }
 
     NSFont *labelFont = [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
-    [attrString addAttribute:NSFontAttributeName value:labelFont range:NSMakeRange(0, label.length)];
-    [attrString addAttribute:NSForegroundColorAttributeName value:[NSColor secondaryLabelColor] range:NSMakeRange(0, label.length)];
+    NSColor *labelTextColor = highlightText ? markerColor : [NSColor secondaryLabelColor];
+    NSAttributedString *labelAttr = [[NSAttributedString alloc] initWithString:label
+        attributes:@{NSFontAttributeName: labelFont,
+                     NSForegroundColorAttributeName: labelTextColor}];
+    [attrString appendAttributedString:labelAttr];
 
-    NSFont *valueFont = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightSemibold];
-    NSRange valueRange = NSMakeRange(label.length, fullText.length - label.length);
-    NSColor *valueColor = color ?: [NSColor labelColor];
-    [attrString addAttribute:NSFontAttributeName value:valueFont range:valueRange];
-    [attrString addAttribute:NSForegroundColorAttributeName value:valueColor range:valueRange];
+    if (value.length > 0) {
+        NSString *valueText = [NSString stringWithFormat:@"  %@", value];
+        NSFont *valueFont = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightSemibold];
+        NSColor *valueTextColor = highlightText ? markerColor : [NSColor labelColor];
+        NSAttributedString *valueAttr = [[NSAttributedString alloc] initWithString:valueText
+            attributes:@{NSFontAttributeName: valueFont,
+                         NSForegroundColorAttributeName: valueTextColor}];
+        [attrString appendAttributedString:valueAttr];
+    }
 
     item.attributedTitle = attrString;
+}
+
+- (void)configureStatItem:(NSMenuItem *)item
+                    label:(NSString *)label
+                    value:(NSString *)value
+                    color:(NSColor *)color
+                     icon:(NSString *)icon
+                showBadge:(BOOL)showBadge {
+    [self configureStatItem:item label:label value:value color:color icon:icon showBadge:showBadge highlightText:NO];
 }
 
 - (NSMenuItem *)styledStatItemWithLabel:(NSString *)label value:(NSString *)value color:(NSColor *)color {
     NSString *fullText = [NSString stringWithFormat:@"%@  %@", label, value];
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
     item.enabled = NO;
-    [self configureStatItem:item label:label value:value color:color];
+    [self configureStatItem:item label:label value:value color:color icon:nil];
+    return item;
+}
+
+ - (NSMenuItem *)styledStatItemWithLabel:(NSString *)label
+                                   value:(NSString *)value
+                                   color:(NSColor *)color
+                                    icon:(NSString *)icon {
+    return [self styledStatItemWithLabel:label value:value color:color icon:icon showBadge:YES];
+}
+
+- (NSMenuItem *)styledStatItemWithLabel:(NSString *)label
+                                  value:(NSString *)value
+                                  color:(NSColor *)color
+                                   icon:(NSString *)icon
+                              showBadge:(BOOL)showBadge {
+    NSString *fullText = [NSString stringWithFormat:@"%@  %@", label, value];
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:fullText action:nil keyEquivalent:@""];
+    item.enabled = NO;
+    [self configureStatItem:item label:label value:value color:color icon:icon showBadge:showBadge];
     return item;
 }
 
@@ -683,6 +790,57 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     NSString *label = info[@"label"];
     NSColor *color = info[@"color"];
     [self configureStatItem:item label:label value:value color:color];
+}
+
+- (NSString *)captureStartDisplayValue {
+    if (self.captureStartDate) {
+        return [self.captureDateFormatter stringFromDate:self.captureStartDate];
+    }
+    return @"Not capturing";
+}
+
+- (NSColor *)highlightColorForProcessSummary:(ProcessTrafficSummary *)summary {
+    return [[SNBBadgeRegistry sharedRegistry] colorForProcessName:summary.processName
+                                                              pid:summary.processPID
+                                             createIfMissing:YES];
+}
+
+- (void)updateProcessHighlightColorsWithSummaries:(NSArray<ProcessTrafficSummary *> *)summaries {
+    [self.hostColorMap removeAllObjects];
+    for (ProcessTrafficSummary *summary in summaries) {
+        NSColor *color = [self highlightColorForProcessSummary:summary];
+        for (NSString *destination in summary.destinations) {
+            if (destination.length > 0 && !self.hostColorMap[destination]) {
+                self.hostColorMap[destination] = color;
+            }
+        }
+    }
+}
+
+- (NSColor *)processHighlightColorForConnection:(ConnectionTraffic *)connection {
+    if (!connection.processName.length && connection.processPID == 0) {
+        return [NSColor labelColor];
+    }
+    return [[SNBBadgeRegistry sharedRegistry] colorForProcessName:connection.processName
+                                                              pid:connection.processPID
+                                             createIfMissing:YES];
+}
+
+- (NSString *)badgeIconForConnection:(ConnectionTraffic *)connection {
+    NSString *fallback = connection.destinationAddress.length > 0 ? connection.destinationAddress : connection.sourceAddress;
+    return [[SNBBadgeRegistry sharedRegistry] badgeIconForProcessName:connection.processName
+                                                                 pid:connection.processPID
+                                                      fallbackLabel:fallback];
+}
+
+- (NSString *)badgeIconForHost:(HostTraffic *)host {
+    NSString *label = host.hostname.length > 0 ? host.hostname : host.address;
+    return [[SNBBadgeRegistry sharedRegistry] badgeIconForLabel:label fallback:host.address];
+}
+
+- (NSColor *)highlightColorForHostAddress:(NSString *)address {
+    NSColor *color = self.hostColorMap[address];
+    return color ?: [NSColor labelColor];
 }
 
 - (void)requestFullVisualizationRefresh {
@@ -876,6 +1034,12 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     [settingsSubmenu addItem:toggleHosts];
     [settingsSubmenu addItem:toggleConnections];
+    NSMenuItem *toggleProcessActivity = [[NSMenuItem alloc] initWithTitle:@"Show Process Activity"
+                                                                     action:@selector(toggleShowProcessActivity:)
+                                                              keyEquivalent:@""];
+    toggleProcessActivity.target = target;
+    toggleProcessActivity.state = self.showProcessActivity ? NSControlStateValueOn : NSControlStateValueOff;
+    [settingsSubmenu addItem:toggleProcessActivity];
     [settingsSubmenu addItem:toggleMap];
     [settingsSubmenu addItem:[NSMenuItem separatorItem]];
 
@@ -1013,6 +1177,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                 assetMonitorEnabled:(BOOL)assetMonitorEnabled
                      networkAssets:(NSArray<SNBNetworkAsset *> *)networkAssets
                    recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets {
+    [self updateProcessHighlightColorsWithSummaries:stats.processSummaries ?: @[]];
     if (!self.menuIsOpen || !self.visualizationSubmenu) {
         return;
     }
@@ -1034,6 +1199,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     [self refreshTopHostsSectionWithStats:stats];
     [self refreshTopConnectionsSectionWithStats:stats];
+    [self refreshProcessActivitySectionWithStats:stats];
 
     [self refreshMaliciousConnectionsSectionWithStats:stats
                                  threatIntelResults:threatIntelResults];
@@ -1186,6 +1352,87 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     }
 }
 
+- (void)appendProcessActivitySectionWithSummaries:(NSArray<ProcessTrafficSummary *> *)summaries
+                                     detailsMenu:(NSMenu *)detailsMenu {
+    if (!detailsMenu) {
+        return;
+    }
+    if (!self.showProcessActivity) {
+        self.processActivityHeader = nil;
+        self.processActivitySeparator = nil;
+        self.processActivityItems = [NSMutableArray array];
+        return;
+    }
+
+    NSMenuItem *lastItem = detailsMenu.itemArray.lastObject;
+    if (lastItem && !lastItem.isSeparatorItem) {
+        [detailsMenu addItem:[NSMenuItem separatorItem]];
+    }
+
+    NSUInteger displayCount = self.configuration.maxTopConnectionsToShow;
+    NSString *headerTitle = [NSString stringWithFormat:@"PROCESS ACTIVITY (top %lu)",
+                             (unsigned long)displayCount];
+    NSMenuItem *processHeader = [self collapsibleSectionHeaderWithTitle:headerTitle
+                                                                expanded:self.sectionProcessActivityExpanded
+                                                                  action:@selector(toggleSectionProcessActivity)
+                                                                  target:self];
+    self.processActivityHeader = processHeader;
+    [detailsMenu addItem:processHeader];
+
+    NSArray<NSMenuItem *> *items = @[];
+    if (self.sectionProcessActivityExpanded) {
+        items = [self menuItemsForProcessActivitySectionWithSummaries:summaries];
+        for (NSMenuItem *item in items) {
+            [detailsMenu addItem:item];
+        }
+    }
+    self.processActivityItems = items.count > 0 ? [items mutableCopy] : [NSMutableArray array];
+
+    NSMenuItem *separator = [NSMenuItem separatorItem];
+    self.processActivitySeparator = separator;
+    [detailsMenu addItem:separator];
+}
+
+- (NSArray<NSMenuItem *> *)menuItemsForProcessActivitySectionWithSummaries:(NSArray<ProcessTrafficSummary *> *)summaries {
+    NSMutableArray<NSMenuItem *> *items = [NSMutableArray array];
+    NSUInteger destLimit = 3;
+    for (ProcessTrafficSummary *summary in summaries) {
+        NSString *processLabel = summary.processName.length > 0 ? summary.processName : @"Unknown Process";
+        if (summary.processPID > 0) {
+            processLabel = [processLabel stringByAppendingFormat:@" (PID %d)", summary.processPID];
+        }
+        NSString *bytesStr = [SNBByteFormatter stringFromBytes:summary.bytes];
+        NSColor *color = [self highlightColorForProcessSummary:summary];
+        NSString *icon = [[SNBBadgeRegistry sharedRegistry] badgeIconForProcessName:summary.processName
+                                                                                pid:summary.processPID
+                                                                     fallbackLabel:processLabel];
+        NSMenuItem *processItem = [self styledStatItemWithLabel:processLabel
+                                                         value:bytesStr
+                                                         color:color
+                                                          icon:icon
+                                                     showBadge:YES];
+        [items addObject:processItem];
+
+        NSMutableArray<NSString *> *details = [NSMutableArray array];
+        [details addObject:[NSString stringWithFormat:@"%lu connection%@", (unsigned long)summary.connectionCount,
+                            summary.connectionCount == 1 ? @"" : @"s"]];
+        if (summary.destinations.count > 0) {
+            NSUInteger showCount = MIN(destLimit, summary.destinations.count);
+            NSArray<NSString *> *destinations = [summary.destinations subarrayWithRange:NSMakeRange(0, showCount)];
+            NSString *destList = [destinations componentsJoinedByString:@", "];
+            NSString *destComponent = [NSString stringWithFormat:@"dest: %@", destList];
+            if (summary.destinations.count > showCount) {
+                destComponent = [destComponent stringByAppendingFormat:@" …+%lu", (unsigned long)(summary.destinations.count - showCount)];
+            }
+            [details addObject:destComponent];
+        }
+        NSString *detailText = [NSString stringWithFormat:@"  %@", [details componentsJoinedByString:@"  •  "]];
+        NSMenuItem *detailItem = [self styledListItemWithText:detailText color:[NSColor secondaryLabelColor]];
+        [items addObject:detailItem];
+    }
+    return [items copy];
+}
+
 - (NSString *)sourceLabelForConnection:(ConnectionTraffic *)connection {
     NSString *sourceAddress = connection.sourceAddress ?: @"";
     if (connection.processName.length == 0) {
@@ -1216,9 +1463,12 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         NSString *hostName = host.hostname.length > 0 ? host.hostname : @"";
         NSString *hostDisplay = hostName.length > 0 ? [NSString stringWithFormat:@"%@ (%@)", hostName, host.address] : host.address;
         NSString *bytesStr = [SNBByteFormatter stringFromBytes:host.bytes];
+        NSColor *hostColor = [self highlightColorForHostAddress:host.address];
+        NSString *icon = [self badgeIconForHost:host];
         NSMenuItem *hostItem = [self styledStatItemWithLabel:hostDisplay
-                                                       value:bytesStr
-                                                       color:[NSColor labelColor]];
+                                                      value:bytesStr
+                                                      color:hostColor
+                                                       icon:icon];
         [items addObject:hostItem];
     }
     return items;
@@ -1256,9 +1506,12 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         } else {
             SNBLogUIDebug("Top connection uses process %@ (PID %d)", connection.processName, connection.processPID);
         }
+        NSColor *connColor = [self processHighlightColorForConnection:connection];
+        NSString *connectionIcon = [self badgeIconForConnection:connection];
         NSMenuItem *connectionItem = [self styledStatItemWithLabel:connectionLabel
                                                            value:bytesStr
-                                                           color:[NSColor labelColor]];
+                                                           color:connColor
+                                                            icon:connectionIcon];
         [items addObject:connectionItem];
     }
     return items;
@@ -1284,6 +1537,29 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                           beforeItem:self.topConnectionsSectionSeparator
                                 inMenu:self.detailsSubmenu
                              withItems:items];
+}
+
+- (void)refreshProcessActivitySectionWithStats:(TrafficStats *)stats {
+    if (!self.detailsSubmenu || !self.processActivityHeader) {
+        return;
+    }
+    if (!self.showProcessActivity) {
+        return;
+    }
+    if (!self.sectionProcessActivityExpanded) {
+        [self replaceMenuItemsAfterHeader:self.processActivityHeader
+                              beforeItem:self.processActivitySeparator
+                                    inMenu:self.detailsSubmenu
+                                 withItems:@[]];
+        self.processActivityItems = [NSMutableArray array];
+        return;
+    }
+    NSArray<NSMenuItem *> *items = [self menuItemsForProcessActivitySectionWithSummaries:stats.processSummaries ?: @[]];
+    [self replaceMenuItemsAfterHeader:self.processActivityHeader
+                          beforeItem:self.processActivitySeparator
+                                inMenu:self.detailsSubmenu
+                             withItems:items];
+    self.processActivityItems = items.count > 0 ? [items mutableCopy] : [NSMutableArray array];
 }
 
 - (NSArray<NSMenuItem *> *)menuItemsForMaliciousConnectionsSectionWithEntries:(NSArray<NSDictionary *> *)entries {
@@ -1420,6 +1696,9 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 }
 
 - (void)refreshDetailStatsWithStats:(TrafficStats *)stats {
+    NSString *captureValue = [self captureStartDisplayValue];
+    [self updateDetailItemForKey:SNBMenuItemKeyCaptureStart value:captureValue];
+
     [self updateDetailItemForKey:SNBMenuItemKeyDetailIncoming value:[SNBByteFormatter stringFromBytes:stats.incomingBytes]];
     [self updateDetailItemForKey:SNBMenuItemKeyDetailOutgoing value:[SNBByteFormatter stringFromBytes:stats.outgoingBytes]];
     [self updateDetailItemForKey:SNBMenuItemKeyDetailTotal value:[SNBByteFormatter stringFromBytes:stats.totalBytes]];
@@ -1470,6 +1749,9 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     self.maliciousConnectionsSeparator = nil;
     self.cleanConnectionsHeader = nil;
     self.cleanConnectionsSeparator = nil;
+    self.processActivityHeader = nil;
+    self.processActivitySeparator = nil;
+    self.processActivityItems = nil;
     [self.detailStatItemInfo removeAllObjects];
 }
 
@@ -1524,6 +1806,8 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     if (!visualizationSubmenu) {
         return;
     }
+
+    [self updateProcessHighlightColorsWithSummaries:stats.processSummaries ?: @[]];
 
     [self.dynamicStatItemInfo removeAllObjects];
     [self.detailStatItemInfo removeAllObjects];
@@ -1938,6 +2222,11 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         [self tearDownMapMenuItem];
     }
 
+    NSString *captureValue = [self captureStartDisplayValue];
+    NSMenuItem *captureItem = [self styledStatItemWithLabel:@"Capture started:" value:captureValue color:[NSColor labelColor]];
+    [self cacheDetailItem:captureItem label:@"Capture started:" color:[NSColor labelColor] forKey:SNBMenuItemKeyCaptureStart];
+    [detailsSubmenu addItem:captureItem];
+
     NSString *incomingStr = [SNBByteFormatter stringFromBytes:stats.incomingBytes];
     NSMenuItem *incomingItem = [self styledStatItemWithLabel:@"↓ Incoming:" value:incomingStr color:[NSColor labelColor]];
     [self cacheDetailItem:incomingItem label:@"↓ Incoming:" color:[NSColor labelColor] forKey:SNBMenuItemKeyDetailIncoming];
@@ -2041,6 +2330,14 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     } else {
         self.topConnectionsSectionHeader = nil;
         self.topConnectionsSectionSeparator = nil;
+    }
+
+    if (self.showProcessActivity) {
+        [self appendProcessActivitySectionWithSummaries:stats.processSummaries detailsMenu:detailsSubmenu];
+    } else {
+        self.processActivityHeader = nil;
+        self.processActivitySeparator = nil;
+        self.processActivityItems = [NSMutableArray array];
     }
 
     if (assetMonitorEnabled && networkAssets.count > 0) {
@@ -2212,6 +2509,12 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 - (void)toggleSectionNetworkAssets {
     self.sectionNetworkAssetsExpanded = !self.sectionNetworkAssetsExpanded;
     SNBLogUIDebug("Toggled network assets section: %d", self.sectionNetworkAssetsExpanded);
+    [self requestFullVisualizationRefresh];
+}
+
+- (void)toggleSectionProcessActivity {
+    self.sectionProcessActivityExpanded = !self.sectionProcessActivityExpanded;
+    SNBLogUIDebug("Toggled process activity section: %d", self.sectionProcessActivityExpanded);
     [self requestFullVisualizationRefresh];
 }
 

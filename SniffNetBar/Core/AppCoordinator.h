@@ -35,6 +35,7 @@
 - (void)toggleShowTopHosts:(NSMenuItem *)sender;
 - (void)toggleShowTopConnections:(NSMenuItem *)sender;
 - (void)toggleShowMap:(NSMenuItem *)sender;
+- (void)toggleShowProcessActivity:(NSMenuItem *)sender;
 - (void)selectMapProvider:(NSMenuItem *)sender;
 - (void)toggleThreatIntel:(NSMenuItem *)sender;
 - (void)toggleDailyStatistics:(NSMenuItem *)sender;

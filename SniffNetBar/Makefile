@@ -58,7 +58,7 @@ THREATINTEL_SOURCES = ThreatIntel/ThreatIntelModels.m \
                       ThreatIntel/Providers/AbuseIPDBProvider.m \
                       ThreatIntel/Providers/GreyNoiseProvider.m
 UI_SOURCES = UI/MapMenuView.m UI/MenuBuilder.m UI/MenuBuilder+ThreatDisplay.m
-UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m Utils/ProcessLookup.m Utils/ProcessLookup_lsof.m Utils/ProcessLookup_Native.m Utils/SMAppServiceHelper.m Utils/SNBPrivilegedHelperClient.m Utils/SNBLocationStore.m
+UTIL_SOURCES = Utils/ByteFormatter.m Utils/ExpiringCache.m Utils/IPAddressUtilities.m Utils/Logger.m Utils/ProcessLookup.m Utils/ProcessLookup_lsof.m Utils/ProcessLookup_Native.m Utils/SMAppServiceHelper.m Utils/SNBPrivilegedHelperClient.m Utils/SNBLocationStore.m UI/SNBBadgeRegistry.m
 XPC_SOURCES = XPC/PacketInfo+Serialization.m XPC/ProcessInfo+Serialization.m XPC/NetworkDevice+Serialization.m
 
 # Test sources

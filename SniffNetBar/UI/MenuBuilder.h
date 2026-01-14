@@ -22,8 +22,10 @@
 @property (nonatomic, assign) BOOL showTopHosts;
 @property (nonatomic, assign) BOOL showTopConnections;
 @property (nonatomic, assign) BOOL showMap;
+@property (nonatomic, assign) BOOL showProcessActivity;
 @property (nonatomic, assign) BOOL dailyStatsEnabled;
 @property (nonatomic, assign) BOOL statsReportAvailable;
+@property (nonatomic, strong) NSDate *captureStartDate;
 @property (nonatomic, copy, readonly) NSString *mapProviderName;
 @property (nonatomic, assign, readonly) BOOL menuIsOpen;
 
@@ -41,6 +43,7 @@
 @property (nonatomic, assign) BOOL sectionTopHostsExpanded;
 @property (nonatomic, assign) BOOL sectionTopConnectionsExpanded;
 @property (nonatomic, assign) BOOL sectionNetworkAssetsExpanded;
+@property (nonatomic, assign) BOOL sectionProcessActivityExpanded;
 
 - (instancetype)initWithMenu:(NSMenu *)menu
                   statusItem:(NSStatusItem *)statusItem
@@ -83,5 +86,6 @@
 - (void)toggleSectionTopHosts;
 - (void)toggleSectionTopConnections;
 - (void)toggleSectionNetworkAssets;
+- (void)toggleSectionProcessActivity;
 
 @end
