@@ -55,6 +55,7 @@
 @property (nonatomic, assign) NSInteger packetCount;
 @property (nonatomic, strong, nullable) NSString *processName;
 @property (nonatomic, assign) pid_t processPID;
+@property (nonatomic, assign) CFAbsoluteTime lastActivity;
 
 @end
 

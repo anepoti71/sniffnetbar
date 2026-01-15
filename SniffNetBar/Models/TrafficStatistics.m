@@ -26,6 +26,7 @@ static const NSUInteger kMaxConnectionCacheSize = 1000;
 static const NSUInteger kMaxHostnameCacheSize = 500;
 static const NSTimeInterval kCacheExpirationTime = 3600; // 1 hour
 static const NSTimeInterval kCleanupInterval = 300; // 5 minutes
+static const NSTimeInterval kConnectionRetentionSeconds = 10.0; // Remove stale connections after 10s of inactivity
 static const NSTimeInterval kDNSLookupTimeout = 5.0; // 5 seconds
 static const long kMaxConcurrentDNSLookups = 8;
 static const NSUInteger kMaxProcessCacheSize = 500;
@@ -354,6 +355,21 @@ static NSString *SNBResolveHostname(NSString *address,
 - (void)performCacheCleanup {
     dispatch_async(self.statsQueue, ^{
         NSUInteger expiredCount = [self.hostnameCache cleanupAndReturnExpiredCount];
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+
+        // Remove stale TCP records that haven't seen activity recently
+        NSMutableArray<SNBConnectionKey *> *staleConnections = [NSMutableArray array];
+        [self.connectionStats enumerateKeysAndObjectsUsingBlock:^(SNBConnectionKey *key, ConnectionTraffic *connection, BOOL *stop) {
+            if ((now - connection.lastActivity) > kConnectionRetentionSeconds) {
+                [staleConnections addObject:key];
+            }
+        }];
+        for (SNBConnectionKey *key in staleConnections) {
+            [self.connectionStats removeObjectForKey:key];
+        }
+        if (staleConnections.count > 0) {
+            self.statsCacheDirty = YES;
+        }
 
         // If host stats exceed max, remove entries with least traffic
         if (self.hostStats.count > kMaxHostCacheSize) {
@@ -563,6 +579,7 @@ static NSString *SNBResolveHostname(NSString *address,
             }
             connection.bytes += packetInfo.totalBytes;
             connection.packetCount++;
+            connection.lastActivity = CFAbsoluteTimeGetCurrent();
         }
     });
 }
