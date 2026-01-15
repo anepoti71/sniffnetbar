@@ -352,24 +352,35 @@ static NSString *SNBResolveHostname(NSString *address,
     return [self.localAddresses containsObject:address];
 }
 
+- (void)removeStaleConnectionsLocked:(CFAbsoluteTime)now {
+    if (now <= 0) {
+        now = CFAbsoluteTimeGetCurrent();
+    }
+    NSMutableArray<SNBConnectionKey *> *staleConnections = [NSMutableArray array];
+    [self.connectionStats enumerateKeysAndObjectsUsingBlock:^(SNBConnectionKey *key, ConnectionTraffic *connection, BOOL *stop) {
+        if ((now - connection.lastActivity) > kConnectionRetentionSeconds) {
+            [staleConnections addObject:key];
+        }
+    }];
+    for (SNBConnectionKey *key in staleConnections) {
+        [self.connectionStats removeObjectForKey:key];
+        [self.processCache removeObjectForKey:key];
+        [self.lsofProcessCache removeObjectForKey:key];
+        [self.pendingHelperProcessInfos removeObjectForKey:key];
+        [self.pendingLsofProcessInfos removeObjectForKey:key];
+    }
+    if (staleConnections.count > 0) {
+        self.statsCacheDirty = YES;
+    }
+}
+
 - (void)performCacheCleanup {
     dispatch_async(self.statsQueue, ^{
         NSUInteger expiredCount = [self.hostnameCache cleanupAndReturnExpiredCount];
         CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
 
         // Remove stale TCP records that haven't seen activity recently
-        NSMutableArray<SNBConnectionKey *> *staleConnections = [NSMutableArray array];
-        [self.connectionStats enumerateKeysAndObjectsUsingBlock:^(SNBConnectionKey *key, ConnectionTraffic *connection, BOOL *stop) {
-            if ((now - connection.lastActivity) > kConnectionRetentionSeconds) {
-                [staleConnections addObject:key];
-            }
-        }];
-        for (SNBConnectionKey *key in staleConnections) {
-            [self.connectionStats removeObjectForKey:key];
-        }
-        if (staleConnections.count > 0) {
-            self.statsCacheDirty = YES;
-        }
+        [self removeStaleConnectionsLocked:now];
 
         // If host stats exceed max, remove entries with least traffic
         if (self.hostStats.count > kMaxHostCacheSize) {
@@ -990,6 +1001,9 @@ static NSString *SNBResolveHostname(NSString *address,
     stats.outgoingBytes = self.outgoingBytes;
     stats.totalPackets = self.totalPackets;
     stats.bytesPerSecond = self.cachedBytesPerSecond;
+
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    [self removeStaleConnectionsLocked:now];
 
     ConfigurationManager *config = [ConfigurationManager sharedManager];
     // Use cached results if available and cache is clean
