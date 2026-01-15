@@ -36,7 +36,8 @@
 @property (nonatomic, assign) NSUInteger renderGeneration;
 @property (nonatomic, strong) NSDate *lastCacheCleanupTime;
 @property (nonatomic, strong) dispatch_semaphore_t geoLocationSemaphore;
-@property (nonatomic, assign, readwrite) NSUInteger drawnConnectionCount;
+// Thread-safe: written on background queue, read on main thread
+@property (atomic, assign, readwrite) NSUInteger drawnConnectionCount;
 @end
 
 @implementation MapMenuView

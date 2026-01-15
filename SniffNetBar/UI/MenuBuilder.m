@@ -2091,7 +2091,9 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         NSArray<ConnectionTraffic *> *mapConnections = [self connectionsForMapFromStats:stats];
         NSUInteger totalPublicConnections = mapConnections.count;
 
-        // Update map with current connections to ensure drawnConnectionCount is current
+        // Update map with current connections. Note: drawnConnectionCount is updated
+        // asynchronously on a background queue, so we cache the value to avoid blocking
+        // the main thread. The count may be briefly stale but will converge as geolocation completes.
         if (self.showMap && self.mapMenuView) {
             [self.mapMenuView updateWithConnections:mapConnections];
             self.lastGeolocatedConnectionCount = self.mapMenuView.drawnConnectionCount;
