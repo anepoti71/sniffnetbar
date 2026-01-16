@@ -254,6 +254,8 @@ clean:
 
 install: $(APP_BUNDLE) tools
 	@echo "Installing $(APP_NAME)..."
+	@echo "Stopping running $(APP_NAME) instances (if any)..."
+	@pkill -x $(APP_NAME) >/dev/null 2>&1 || true
 	@mkdir -p $(INSTALL_DIR)
 	@cp -R $(APP_BUNDLE) $(INSTALL_DIR)/
 	@cp $(BUILD_DIR)/register_helper $(INSTALL_APP)/Contents/MacOS/register_helper

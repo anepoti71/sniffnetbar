@@ -95,6 +95,9 @@ static NSString *SNBStoredDeviceName(void) {
 // Last stats for highlighting updates
 @property (nonatomic, strong) TrafficStats *lastTrafficStats;
 
+// Fix 3: Track when selection-triggered refresh occurred to avoid redundant refreshes
+@property (nonatomic, assign) NSTimeInterval lastSelectionRefreshTime;
+
 // Helper method for provider summary (used by category)
 - (NSString *)providerSummaryForResponse:(TIEnrichmentResponse *)response;
 @end
@@ -800,8 +803,8 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 }
 
 - (NSColor *)highlightColorForProcessSummary:(ProcessTrafficSummary *)summary {
-    // Check if this process is related to the selected connection from the map
-    if ([self isProcessRelatedToSelectedConnection:summary.destinations]) {
+    // Fix 5: Use enhanced method that also checks incoming traffic via topConnections
+    if ([self isProcessSummaryRelatedToSelectedConnection:summary]) {
         return [NSColor systemYellowColor];
     }
 
@@ -893,6 +896,39 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
             return YES;
         }
     }
+    return NO;
+}
+
+// Fix 5: Enhanced process correlation that also checks connections for incoming traffic
+- (BOOL)isProcessSummaryRelatedToSelectedConnection:(ProcessTrafficSummary *)summary {
+    if (!self.selectedSourceIP || !self.selectedDestinationIP) {
+        return NO;
+    }
+
+    // First check destinations (outgoing traffic) - existing logic
+    for (NSString *dest in summary.destinations) {
+        if ([dest isEqualToString:self.selectedSourceIP] ||
+            [dest isEqualToString:self.selectedDestinationIP]) {
+            return YES;
+        }
+    }
+
+    // Also check if any of this process's connections in topConnections matches the selection
+    // This handles incoming traffic where the process is the destination
+    if (self.lastTrafficStats.topConnections) {
+        for (ConnectionTraffic *conn in self.lastTrafficStats.topConnections) {
+            // Check if this connection belongs to this process
+            if (![conn.processName isEqualToString:summary.processName] ||
+                conn.processPID != summary.processPID) {
+                continue;
+            }
+            // Check if this connection matches the selected IPs (in either direction)
+            if ([self isConnectionSelected:conn]) {
+                return YES;
+            }
+        }
+    }
+
     return NO;
 }
 
@@ -1247,29 +1283,17 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         self.lastGeolocatedConnectionCount = 0;
     }
 
+    // Dynamic stat items (network rate, totals) are always updated - they're in the main status bar
     [self refreshDynamicStatItemsWithStats:stats
                              mapConnections:mapConnections
                               networkAssets:networkAssets
                             recentNewAssets:recentNewAssets];
 
-    [self refreshDetailStatsWithStats:stats];
-
-    [self refreshTopHostsSectionWithStats:stats];
-    [self refreshTopConnectionsSectionWithStats:stats];
-    [self refreshProcessActivitySectionWithStats:stats];
-
-    [self refreshMaliciousConnectionsSectionWithStats:stats
-                                 threatIntelResults:threatIntelResults];
-
-    [self refreshCleanConnectionsSectionWithStats:stats
-                               threatIntelResults:threatIntelResults];
-
-    [self refreshNetworkDevicesSectionWithAssets:networkAssets
-                                 recentNewAssets:recentNewAssets
-                             assetMonitorEnabled:assetMonitorEnabled];
-
+    // Check if full rebuild is needed BEFORE doing incremental section updates
+    // This prevents wasted work when section toggles trigger a full rebuild
     if (self.needsFullVisualizationRefresh) {
         self.needsFullVisualizationRefresh = NO;
+        SNBLogUIDebug("Full visualization rebuild requested");
         [self updateVisualizationMenuWithStats:stats
                             threatIntelEnabled:threatIntelEnabled
                        threatIntelStatusMessage:threatIntelStatusMessage
@@ -1282,7 +1306,32 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         return;
     }
 
-    SNBLogUIDebug("Skipping visualization menu rebuild while open to keep the status menu visible");
+    // Incremental section updates - only run when menu is stable (no full rebuild needed)
+    [self refreshDetailStatsWithStats:stats];
+
+    // Fix 3: Skip highlighting sections if they were just refreshed by selection change (within 100ms)
+    NSTimeInterval timeSinceSelectionRefresh = [NSDate timeIntervalSinceReferenceDate] - self.lastSelectionRefreshTime;
+    BOOL skipHighlightingSections = (timeSinceSelectionRefresh < 0.1);
+
+    if (!skipHighlightingSections) {
+        [self refreshTopHostsSectionWithStats:stats];
+        [self refreshTopConnectionsSectionWithStats:stats];
+        [self refreshProcessActivitySectionWithStats:stats];
+    } else {
+        SNBLogUIDebug("Skipping highlighting sections - just refreshed by selection change");
+    }
+
+    [self refreshMaliciousConnectionsSectionWithStats:stats
+                                 threatIntelResults:threatIntelResults];
+
+    [self refreshCleanConnectionsSectionWithStats:stats
+                               threatIntelResults:threatIntelResults];
+
+    [self refreshNetworkDevicesSectionWithAssets:networkAssets
+                                 recentNewAssets:recentNewAssets
+                             assetMonitorEnabled:assetMonitorEnabled];
+
+    SNBLogUIDebug("Incremental visualization refresh completed");
 }
 
 - (void)refreshDynamicStatItemsWithStats:(TrafficStats *)stats
@@ -1468,8 +1517,8 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                                                          color:color
                                                           icon:icon
                                                      showBadge:YES];
-        // Add checkmark for processes related to selected connection from map
-        if ([self isProcessRelatedToSelectedConnection:summary.destinations]) {
+        // Fix 5: Add checkmark for processes related to selected connection (including incoming traffic)
+        if ([self isProcessSummaryRelatedToSelectedConnection:summary]) {
             processItem.state = NSControlStateValueOn;
         }
         [items addObject:processItem];
@@ -1609,13 +1658,18 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 }
 
 - (void)refreshProcessActivitySectionWithStats:(TrafficStats *)stats {
+    SNBLogUIDebug("refreshProcessActivitySection: detailsSubmenu=%p, processActivityHeader=%p",
+                  self.detailsSubmenu, self.processActivityHeader);
     if (!self.detailsSubmenu || !self.processActivityHeader) {
+        SNBLogUIDebug("refreshProcessActivitySection: EARLY RETURN - missing submenu or header");
         return;
     }
     if (!self.showProcessActivity) {
+        SNBLogUIDebug("refreshProcessActivitySection: EARLY RETURN - showProcessActivity is NO");
         return;
     }
     if (!self.sectionProcessActivityExpanded) {
+        SNBLogUIDebug("refreshProcessActivitySection: section collapsed, clearing items");
         [self replaceMenuItemsAfterHeader:self.processActivityHeader
                               beforeItem:self.processActivitySeparator
                                     inMenu:self.detailsSubmenu
@@ -1623,12 +1677,16 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         self.processActivityItems = [NSMutableArray array];
         return;
     }
+    SNBLogUIDebug("refreshProcessActivitySection: rebuilding with selection src=%{public}@ dst=%{public}@",
+                  self.selectedSourceIP, self.selectedDestinationIP);
     NSArray<NSMenuItem *> *items = [self menuItemsForProcessActivitySectionWithSummaries:stats.processSummaries ?: @[]];
+    SNBLogUIDebug("refreshProcessActivitySection: created %lu items", (unsigned long)items.count);
     [self replaceMenuItemsAfterHeader:self.processActivityHeader
                           beforeItem:self.processActivitySeparator
                                 inMenu:self.detailsSubmenu
                              withItems:items];
     self.processActivityItems = items.count > 0 ? [items mutableCopy] : [NSMutableArray array];
+    SNBLogUIDebug("refreshProcessActivitySection: completed replacement");
 }
 
 - (NSArray<NSMenuItem *> *)menuItemsForMaliciousConnectionsSectionWithEntries:(NSArray<NSDictionary *> *)entries {
@@ -2568,13 +2626,25 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 - (void)toggleSectionTopHosts {
     self.sectionTopHostsExpanded = !self.sectionTopHostsExpanded;
     SNBLogUIDebug("Toggled top hosts section: %d", self.sectionTopHostsExpanded);
-    [self requestFullVisualizationRefresh];
+
+    // Fix 4: Use incremental refresh if menu structure exists, otherwise request full rebuild
+    if (self.lastTrafficStats && self.topHostsSectionHeader) {
+        [self refreshTopHostsSectionWithStats:self.lastTrafficStats];
+    } else {
+        [self requestFullVisualizationRefresh];
+    }
 }
 
 - (void)toggleSectionTopConnections {
     self.sectionTopConnectionsExpanded = !self.sectionTopConnectionsExpanded;
     SNBLogUIDebug("Toggled top connections section: %d", self.sectionTopConnectionsExpanded);
-    [self requestFullVisualizationRefresh];
+
+    // Fix 4: Use incremental refresh if menu structure exists, otherwise request full rebuild
+    if (self.lastTrafficStats && self.topConnectionsSectionHeader) {
+        [self refreshTopConnectionsSectionWithStats:self.lastTrafficStats];
+    } else {
+        [self requestFullVisualizationRefresh];
+    }
 }
 
 - (void)toggleSectionNetworkAssets {
@@ -2586,7 +2656,13 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 - (void)toggleSectionProcessActivity {
     self.sectionProcessActivityExpanded = !self.sectionProcessActivityExpanded;
     SNBLogUIDebug("Toggled process activity section: %d", self.sectionProcessActivityExpanded);
-    [self requestFullVisualizationRefresh];
+
+    // Fix 4: Use incremental refresh if menu structure exists, otherwise request full rebuild
+    if (self.lastTrafficStats && self.processActivityHeader) {
+        [self refreshProcessActivitySectionWithStats:self.lastTrafficStats];
+    } else {
+        [self requestFullVisualizationRefresh];
+    }
 }
 
 #pragma mark - MapMenuViewDelegate
@@ -2595,14 +2671,27 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     self.selectedSourceIP = sourceIP;
     self.selectedDestinationIP = destinationIP;
     SNBLogUIDebug("Map selection changed: src=%{public}@ dst=%{public}@", sourceIP, destinationIP);
+    SNBLogUIDebug("  lastTrafficStats=%p, detailsSubmenu=%p, processActivityHeader=%p",
+                  self.lastTrafficStats, self.detailsSubmenu, self.processActivityHeader);
 
     // Directly refresh sections that show highlighting instead of requesting full rebuild
     // (full rebuild is skipped when menu is open to keep it stable)
     if (self.lastTrafficStats) {
+        // Recalculate host color map based on new selection state
+        [self updateProcessHighlightColorsWithSummaries:self.lastTrafficStats.processSummaries ?: @[]];
+
+        SNBLogUIDebug("Calling refreshTopHostsSection...");
         [self refreshTopHostsSectionWithStats:self.lastTrafficStats];
+        SNBLogUIDebug("Calling refreshTopConnectionsSection...");
         [self refreshTopConnectionsSectionWithStats:self.lastTrafficStats];
+        SNBLogUIDebug("Calling refreshProcessActivitySection...");
         [self refreshProcessActivitySectionWithStats:self.lastTrafficStats];
+
+        // Fix 3: Track when selection refresh occurred to avoid redundant refreshes
+        self.lastSelectionRefreshTime = [NSDate timeIntervalSinceReferenceDate];
         SNBLogUIDebug("Refreshed sections with highlighting for selection");
+    } else {
+        SNBLogUIDebug("SKIPPED refresh - lastTrafficStats is nil");
     }
 }
 
@@ -2613,9 +2702,15 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 
     // Directly refresh sections to remove highlighting
     if (self.lastTrafficStats) {
+        // Recalculate host color map now that selection is cleared
+        [self updateProcessHighlightColorsWithSummaries:self.lastTrafficStats.processSummaries ?: @[]];
+
         [self refreshTopHostsSectionWithStats:self.lastTrafficStats];
         [self refreshTopConnectionsSectionWithStats:self.lastTrafficStats];
         [self refreshProcessActivitySectionWithStats:self.lastTrafficStats];
+
+        // Fix 3: Track when selection refresh occurred to avoid redundant refreshes
+        self.lastSelectionRefreshTime = [NSDate timeIntervalSinceReferenceDate];
         SNBLogUIDebug("Refreshed sections after clearing selection");
     }
 }
