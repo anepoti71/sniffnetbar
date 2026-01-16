@@ -17,7 +17,7 @@
 #import <WebKit/WebKit.h>
 #import <CoreLocation/CoreLocation.h>
 
-@interface MapMenuView () <WKNavigationDelegate>
+@interface MapMenuView () <WKNavigationDelegate, WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) NSButton *zoomInButton;
 @property (nonatomic, strong) NSButton *zoomOutButton;
@@ -38,6 +38,8 @@
 @property (nonatomic, strong) dispatch_semaphore_t geoLocationSemaphore;
 // Thread-safe: written on background queue, read on main thread
 @property (atomic, assign, readwrite) NSUInteger drawnConnectionCount;
+// Event monitor for capturing clicks in menu context
+@property (nonatomic, strong) id clickEventMonitor;
 @end
 
 @implementation MapMenuView
@@ -64,6 +66,26 @@ static NSString *SNBLocationStoreDirectory(void) {
         self.wantsLayer = YES;
 
         WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+        [config.userContentController addScriptMessageHandler:self name:@"connectionSelect"];
+        [config.userContentController addScriptMessageHandler:self name:@"consoleLog"];
+
+        // Inject script to capture console.log
+        NSString *consoleScript = @"(function(){"
+            "var origLog=console.log;"
+            "console.log=function(){"
+            "  var args=Array.prototype.slice.call(arguments);"
+            "  var msg=args.map(function(a){return typeof a==='object'?JSON.stringify(a):String(a);}).join(' ');"
+            "  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.consoleLog){"
+            "    window.webkit.messageHandlers.consoleLog.postMessage(msg);"
+            "  }"
+            "  origLog.apply(console,arguments);"
+            "};"
+            "})();";
+        WKUserScript *script = [[WKUserScript alloc] initWithSource:consoleScript
+                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                   forMainFrameOnly:YES];
+        [config.userContentController addUserScript:script];
+
         _webView = [[WKWebView alloc] initWithFrame:self.bounds configuration:config];
         _webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _webView.navigationDelegate = self;
@@ -104,6 +126,9 @@ static NSString *SNBLocationStoreDirectory(void) {
 
         [self loadMapHTML];
         [self updateLayout];
+
+        // Install event monitor immediately - NSMenuItem views may not trigger viewDidMoveToWindow
+        [self installClickEventMonitor];
     }
     return self;
 }
@@ -113,7 +138,128 @@ static NSString *SNBLocationStoreDirectory(void) {
     return self.frame.size;
 }
 
+#pragma mark - Event Handling for Menu Item
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+
+    // Remove existing tracking areas
+    for (NSTrackingArea *area in self.trackingAreas) {
+        [self removeTrackingArea:area];
+    }
+
+    // Add new tracking area for the entire view
+    NSTrackingArea *trackingArea = [[NSTrackingArea alloc]
+        initWithRect:self.bounds
+             options:(NSTrackingMouseEnteredAndExited |
+                      NSTrackingMouseMoved |
+                      NSTrackingActiveAlways |
+                      NSTrackingInVisibleRect)
+               owner:self
+            userInfo:nil];
+    [self addTrackingArea:trackingArea];
+}
+
+- (void)handleClickGesture:(NSClickGestureRecognizer *)gesture {
+    if (gesture.state == NSGestureRecognizerStateEnded) {
+        NSPoint locationInView = [gesture locationInView:self.webView];
+        SNBLogUIDebug("Click gesture at (%f, %f)", locationInView.x, locationInView.y);
+
+        // Inject click at this position
+        [self injectClickAtPoint:locationInView];
+    }
+}
+
+- (void)injectClickAtPoint:(NSPoint)point {
+    // WKWebView has Y=0 at bottom, web has Y=0 at top
+    CGFloat webY = self.webView.bounds.size.height - point.y;
+
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){"
+        "  var x=%f, y=%f;"
+        "  console.log('Injected click at', x, y);"
+        "  var el = document.elementFromPoint(x, y);"
+        "  console.log('Element at point:', el ? el.tagName : 'null', el ? el.className : '');"
+        "  if(el){"
+        "    var evt = new MouseEvent('click', {bubbles:true,cancelable:true,clientX:x,clientY:y,view:window});"
+        "    el.dispatchEvent(evt);"
+        "    console.log('Click dispatched to', el.tagName);"
+        "  }"
+        "})();",
+        point.x, webY];
+
+    [self.webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        if (error) {
+            SNBLogUIDebug("JS click error: %{public}@", error.localizedDescription);
+        }
+    }];
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    return YES;
+}
+
+- (BOOL)acceptsFirstResponder {
+    return YES;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    NSPoint localPoint = [self convertPoint:point fromView:self.superview];
+    if (NSPointInRect(localPoint, self.bounds)) {
+        // Check zoom buttons first
+        NSPoint inButtonPoint = [self.zoomInButton convertPoint:point fromView:self.superview];
+        if (NSPointInRect(inButtonPoint, self.zoomInButton.bounds)) {
+            return self.zoomInButton;
+        }
+        NSPoint outButtonPoint = [self.zoomOutButton convertPoint:point fromView:self.superview];
+        if (NSPointInRect(outButtonPoint, self.zoomOutButton.bounds)) {
+            return self.zoomOutButton;
+        }
+        return self.webView;
+    }
+    return nil;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    SNBLogUIDebug("MapMenuView mouseDown at (%f, %f)", event.locationInWindow.x, event.locationInWindow.y);
+
+    // Convert to webview coordinates and inject click
+    NSPoint locationInWebView = [self.webView convertPoint:event.locationInWindow fromView:nil];
+    [self injectClickAtPoint:locationInWebView];
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    // Do nothing, click is handled in mouseDown
+}
+
+- (void)mouseMoved:(NSEvent *)event {
+    // Forward mouse movement for hover effects
+    NSPoint locationInWebView = [self.webView convertPoint:event.locationInWindow fromView:nil];
+
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){"
+        "  var x=%f, y=%f;"
+        "  var el = document.elementFromPoint(x, y);"
+        "  if(el){"
+        "    var evt = new MouseEvent('mouseover', {bubbles:true,cancelable:true,clientX:x,clientY:y,view:window});"
+        "    el.dispatchEvent(evt);"
+        "  }"
+        "})();",
+        locationInWebView.x, self.webView.bounds.size.height - locationInWebView.y];
+
+    [self.webView evaluateJavaScript:js completionHandler:nil];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    SNBLogUIDebug("MapMenuView mouseEntered");
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    SNBLogUIDebug("MapMenuView mouseExited");
+}
+
 - (void)dealloc {
+    [self removeClickEventMonitor];
     [_session invalidateAndCancel];
 }
 
@@ -128,8 +274,88 @@ static NSString *SNBLocationStoreDirectory(void) {
 
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
-    if (self.window && self.lastConnections.count > 0) {
-        [self updateWithConnections:self.lastConnections];
+    if (self.window) {
+        // Use local event monitor to capture clicks - this works even when NSMenu intercepts events
+        [self installClickEventMonitor];
+
+        if (self.lastConnections.count > 0) {
+            [self updateWithConnections:self.lastConnections];
+        }
+    } else {
+        // Remove the monitor when view is removed from window
+        [self removeClickEventMonitor];
+    }
+}
+
+- (void)installClickEventMonitor {
+    if (self.clickEventMonitor) {
+        return; // Already installed
+    }
+
+    __weak typeof(self) weakSelf = self;
+    self.clickEventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                                                   handler:^NSEvent *(NSEvent *event) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return event;
+        }
+
+        NSWindow *myWindow = strongSelf.window;
+        if (!myWindow) {
+            return event;
+        }
+
+        // Use screen coordinates for reliable cross-window conversion
+        NSPoint screenPoint;
+        if (event.window) {
+            // Convert from event window coordinates to screen coordinates
+            NSPoint windowPoint = event.locationInWindow;
+            screenPoint = [event.window convertPointToScreen:windowPoint];
+        } else {
+            // Event has no window (shouldn't happen for local monitor, but be safe)
+            return event;
+        }
+
+        // Convert screen coordinates to our window coordinates
+        NSPoint ourWindowPoint = [myWindow convertPointFromScreen:screenPoint];
+
+        // Convert to our view's coordinates
+        NSPoint viewPoint = [strongSelf convertPoint:ourWindowPoint fromView:nil];
+
+        // Check if click is within our bounds
+        if (NSPointInRect(viewPoint, strongSelf.bounds)) {
+            // Convert to webview coordinates
+            NSPoint webViewPoint = [strongSelf.webView convertPoint:ourWindowPoint fromView:nil];
+
+            SNBLogUIDebug("Click in MapMenuView at screen(%f, %f) -> view(%f, %f) -> webView(%f, %f)",
+                    screenPoint.x, screenPoint.y, viewPoint.x, viewPoint.y, webViewPoint.x, webViewPoint.y);
+
+            // Check it's not on zoom buttons
+            NSPoint zoomInPoint = [strongSelf.zoomInButton convertPoint:ourWindowPoint fromView:nil];
+            NSPoint zoomOutPoint = [strongSelf.zoomOutButton convertPoint:ourWindowPoint fromView:nil];
+
+            BOOL onZoomIn = NSPointInRect(zoomInPoint, strongSelf.zoomInButton.bounds);
+            BOOL onZoomOut = NSPointInRect(zoomOutPoint, strongSelf.zoomOutButton.bounds);
+
+            if (!onZoomIn && !onZoomOut) {
+                SNBLogUIDebug("Injecting click at webView(%f, %f)", webViewPoint.x, webViewPoint.y);
+                [strongSelf injectClickAtPoint:webViewPoint];
+            } else {
+                SNBLogUIDebug("Click on zoom button, ignoring");
+            }
+        }
+
+        return event; // Let the event continue (don't block it)
+    }];
+
+    SNBLogUIDebug("Installed local event monitor for clicks");
+}
+
+- (void)removeClickEventMonitor {
+    if (self.clickEventMonitor) {
+        [NSEvent removeMonitor:self.clickEventMonitor];
+        self.clickEventMonitor = nil;
+        SNBLogUIDebug("Removed local event monitor");
     }
 }
 
@@ -458,7 +684,9 @@ static NSString *SNBLocationStoreDirectory(void) {
                                @"srcLon": @(srcCoord.longitude),
                                @"dstLat": @(dstCoord.latitude),
                                @"dstLon": @(dstCoord.longitude),
-                               @"title": lineTitle}];
+                               @"title": lineTitle,
+                               @"srcIP": connection.sourceAddress,
+                               @"dstIP": connection.destinationAddress}];
             SNBLogUIDebug("Map line: %@.%ld (%@) -> %@.%ld (%@)",
                           connection.sourceAddress,
                           connection.sourcePort,
@@ -545,7 +773,9 @@ static NSString *SNBLocationStoreDirectory(void) {
     "width:18px;height:18px;border-radius:50%%;background:#3b82f6;"
     "box-shadow:0 0 0 3px rgba(255,255,255,0.9),0 2px 8px rgba(37,99,235,0.4),"
     "inset 0 1px 3px rgba(255,255,255,0.5);}"
-    ".connection-line{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.15));}"
+    ".connection-line{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.15));cursor:pointer;pointer-events:stroke;}"
+    ".leaflet-overlay-pane svg{pointer-events:auto;}"
+    ".leaflet-overlay-pane svg path{pointer-events:stroke;}"
     "@keyframes pulse{0%%,100%%{opacity:0.7;transform:scale(1);}50%%{opacity:1;transform:scale(1.08);}}"
     "@keyframes dash{0%%{stroke-dashoffset:20;}100%%{stroke-dashoffset:0;}}"
     ".leaflet-interactive.connection-line{animation:dash 1.5s linear infinite;}"
@@ -555,6 +785,7 @@ static NSString *SNBLocationStoreDirectory(void) {
     "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>"
     "<script>"
     "var map=L.map('map',{zoomControl:false,attributionControl:false}).setView([20,0],2);"
+    "map.on('click',function(e){console.log('MAP CLICK at',e.latlng.lat,e.latlng.lng);});"
     "L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);"
     "var svg=document.createElementNS('http://www.w3.org/2000/svg','svg');"
     "svg.setAttribute('width','0');svg.setAttribute('height','0');"
@@ -562,6 +793,7 @@ static NSString *SNBLocationStoreDirectory(void) {
     "document.body.appendChild(svg);"
     "var markers=[];var lines=[];var hasAutoFitted=false;"
     "var popupOpen=false;"
+    "var selectedLine=null;"
     "var pendingUpdate=null;"
     "function applyPendingUpdate(){"
     "  if(pendingUpdate){"
@@ -656,8 +888,32 @@ static NSString *SNBLocationStoreDirectory(void) {
     "var arcPts=arcPoints({lat:c.srcLat,lon:c.srcLon},{lat:c.dstLat,lon:c.dstLon});console.log('Arc points:',arcPts.length);"
     "var opacity=Math.max(0.3,1-(idx*0.08));"
     "var lineWeight=Math.max(1,%ld-(idx*0.3));"
-    "var line=L.polyline(arcPts,{color:'%@',weight:lineWeight,opacity:opacity*%f,dashArray:'8,12',className:'connection-line'});"
+    "var defaultColor='%@';"
+    "var line=L.polyline(arcPts,{color:defaultColor,weight:lineWeight,opacity:opacity*%f,dashArray:'8,12',className:'connection-line',interactive:true});"
+    "line.connectionData={srcIP:c.srcIP,dstIP:c.dstIP,defaultColor:defaultColor,defaultWeight:lineWeight};"
     "line.on('add',function(){var path=line.getElement();if(path){path.setAttribute('marker-end','url(#arrowhead)');}});"
+    "line.on('click',function(e){"
+    "  console.log('LINE CLICK EVENT - srcIP:',c.srcIP,'dstIP:',c.dstIP);"
+    "  if(selectedLine&&selectedLine!==line){selectedLine.setStyle({color:selectedLine.connectionData.defaultColor,weight:selectedLine.connectionData.defaultWeight});}"
+    "  selectedLine=line;"
+    "  line.setStyle({color:'#fbbf24',weight:lineWeight+1});"
+    "  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.connectionSelect){"
+    "    console.log('Sending to native: connectionSelect');"
+    "    window.webkit.messageHandlers.connectionSelect.postMessage({source:c.srcIP,destination:c.dstIP});"
+    "  }else{console.log('No webkit messageHandler available');}"
+    "  L.DomEvent.stopPropagation(e);"
+    "});"
+    "line.on('mouseover',function(){"
+    "  console.log('LINE MOUSEOVER - srcIP:',c.srcIP,'dstIP:',c.dstIP);"
+    "  if(selectedLine!==line){line.setStyle({weight:lineWeight+1});}"
+    "  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.connectionSelect){"
+    "    window.webkit.messageHandlers.connectionSelect.postMessage({source:c.srcIP,destination:c.dstIP,isHover:true});"
+    "  }"
+    "});"
+    "line.on('mouseout',function(){"
+    "  console.log('LINE MOUSEOUT');"
+    "  if(selectedLine!==line){line.setStyle({weight:lineWeight});}"
+    "});"
     "if(c.title){var popupContent='<strong>🔄 Connection</strong><br>'+c.title.replace(/→/g,'<br>→ ');line.bindPopup(popupContent);}"
     "line.addTo(map);lines.push(line);console.log('Line added to map');bounds.push([c.srcLat,c.srcLon]);bounds.push([c.dstLat,c.dstLon]);});}"
     "if(bounds.length>0&&!hasAutoFitted){map.fitBounds(bounds,{padding:[20,20],maxZoom:6});hasAutoFitted=true;}}"
@@ -923,6 +1179,39 @@ static NSString *SNBLocationStoreDirectory(void) {
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     self.mapReady = YES;
     [self refreshMarkers];
+}
+
+#pragma mark - WKScriptMessageHandler
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"consoleLog"]) {
+        NSString *logMessage = [message.body description];
+        SNBLogUIDebug("[JS] %{public}@", logMessage);
+        return;
+    }
+
+    if ([message.name isEqualToString:@"connectionSelect"]) {
+        SNBLogUIDebug("connectionSelect message received");
+        NSDictionary *data = message.body;
+        if (![data isKindOfClass:[NSDictionary class]]) {
+            SNBLogUIDebug("connectionSelect: Invalid data type");
+            return;
+        }
+
+        NSString *sourceIP = data[@"source"];
+        NSString *destinationIP = data[@"destination"];
+        SNBLogUIDebug("connectionSelect: sourceIP=%{public}@ destIP=%{public}@", sourceIP, destinationIP);
+
+        if (sourceIP && destinationIP) {
+            if ([self.delegate respondsToSelector:@selector(mapMenuView:didSelectConnectionWithSource:destination:)]) {
+                SNBLogUIDebug("connectionSelect: Calling delegate");
+                [self.delegate mapMenuView:self didSelectConnectionWithSource:sourceIP destination:destinationIP];
+            } else {
+                SNBLogUIDebug("connectionSelect: Delegate does not respond to selector or is nil");
+            }
+        }
+    }
 }
 
 @end

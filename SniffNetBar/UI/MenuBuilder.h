@@ -4,6 +4,7 @@
 //
 
 #import <Cocoa/Cocoa.h>
+#import "MapMenuView.h"
 
 @class ConfigurationManager;
 @class NetworkDevice;
@@ -15,7 +16,11 @@
 - (void)menuBuilderNeedsVisualizationRefresh:(id)sender;
 @end
 
-@interface MenuBuilder : NSObject
+@interface MenuBuilder : NSObject <MapMenuViewDelegate>
+
+// Selected connection from map (for highlighting)
+@property (nonatomic, copy) NSString *selectedSourceIP;
+@property (nonatomic, copy) NSString *selectedDestinationIP;
 
 @property (nonatomic, weak) id<MenuBuilderDelegate> delegate;
 

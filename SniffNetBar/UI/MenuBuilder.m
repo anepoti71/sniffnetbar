@@ -92,6 +92,9 @@ static NSString *SNBStoredDeviceName(void) {
 @property (nonatomic, strong) NSMenuItem *networkDevicesSectionSeparator;
 @property (nonatomic, strong) NSMutableArray<NSMenuItem *> *networkDevicesSectionItems;
 
+// Last stats for highlighting updates
+@property (nonatomic, strong) TrafficStats *lastTrafficStats;
+
 // Helper method for provider summary (used by category)
 - (NSString *)providerSummaryForResponse:(TIEnrichmentResponse *)response;
 @end
@@ -797,6 +800,11 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 }
 
 - (NSColor *)highlightColorForProcessSummary:(ProcessTrafficSummary *)summary {
+    // Check if this process is related to the selected connection from the map
+    if ([self isProcessRelatedToSelectedConnection:summary.destinations]) {
+        return [NSColor systemYellowColor];
+    }
+
     return [[SNBBadgeRegistry sharedRegistry] colorForProcessName:summary.processName
                                                               pid:summary.processPID
                                              createIfMissing:YES];
@@ -815,6 +823,11 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 }
 
 - (NSColor *)processHighlightColorForConnection:(ConnectionTraffic *)connection {
+    // Check if this connection is selected from the map
+    if ([self isConnectionSelected:connection]) {
+        return [NSColor systemYellowColor];
+    }
+
     if (!connection.processName.length && connection.processPID == 0) {
         return [NSColor labelColor];
     }
@@ -836,11 +849,51 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
 }
 
 - (NSColor *)highlightColorForHostAddress:(NSString *)address {
+    // Check if this host is part of the selected connection from the map
+    if (self.selectedSourceIP && self.selectedDestinationIP) {
+        if ([address isEqualToString:self.selectedSourceIP] ||
+            [address isEqualToString:self.selectedDestinationIP]) {
+            return [NSColor systemYellowColor];
+        }
+    }
+
     NSColor *color = self.hostColorMap[address];
     if (!color) {
         color = [[SNBBadgeRegistry sharedRegistry] colorForLabel:address createIfMissing:YES];
     }
     return color ?: [NSColor labelColor];
+}
+
+- (BOOL)isHostAddressSelected:(NSString *)address {
+    if (!self.selectedSourceIP || !self.selectedDestinationIP) {
+        return NO;
+    }
+    return [address isEqualToString:self.selectedSourceIP] ||
+           [address isEqualToString:self.selectedDestinationIP];
+}
+
+- (BOOL)isConnectionSelected:(ConnectionTraffic *)connection {
+    if (!self.selectedSourceIP || !self.selectedDestinationIP) {
+        return NO;
+    }
+    // Match in either direction
+    return ([connection.sourceAddress isEqualToString:self.selectedSourceIP] &&
+            [connection.destinationAddress isEqualToString:self.selectedDestinationIP]) ||
+           ([connection.sourceAddress isEqualToString:self.selectedDestinationIP] &&
+            [connection.destinationAddress isEqualToString:self.selectedSourceIP]);
+}
+
+- (BOOL)isProcessRelatedToSelectedConnection:(NSArray<NSString *> *)destinations {
+    if (!self.selectedSourceIP || !self.selectedDestinationIP) {
+        return NO;
+    }
+    for (NSString *dest in destinations) {
+        if ([dest isEqualToString:self.selectedSourceIP] ||
+            [dest isEqualToString:self.selectedDestinationIP]) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 - (void)requestFullVisualizationRefresh {
@@ -1125,6 +1178,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         ConfigurationManager *config = self.configuration;
         self.mapMenuView = [[MapMenuView alloc] initWithFrame:NSMakeRect(0, 0, config.menuFixedWidth, config.mapMenuViewHeight)];
         self.mapMenuView.providerName = self.mapProviderName;
+        self.mapMenuView.delegate = self;
         self.mapMenuView.translatesAutoresizingMaskIntoConstraints = NO;
 
         self.mapMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
@@ -1177,6 +1231,9 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                 assetMonitorEnabled:(BOOL)assetMonitorEnabled
                      networkAssets:(NSArray<SNBNetworkAsset *> *)networkAssets
                    recentNewAssets:(NSArray<SNBNetworkAsset *> *)recentNewAssets {
+    // Save stats for highlighting updates when selection changes
+    self.lastTrafficStats = stats;
+
     [self updateProcessHighlightColorsWithSummaries:stats.processSummaries ?: @[]];
     if (!self.menuIsOpen || !self.visualizationSubmenu) {
         return;
@@ -1411,6 +1468,10 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                                                          color:color
                                                           icon:icon
                                                      showBadge:YES];
+        // Add checkmark for processes related to selected connection from map
+        if ([self isProcessRelatedToSelectedConnection:summary.destinations]) {
+            processItem.state = NSControlStateValueOn;
+        }
         [items addObject:processItem];
 
         NSMutableArray<NSString *> *details = [NSMutableArray array];
@@ -1469,6 +1530,10 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                                                       value:bytesStr
                                                       color:hostColor
                                                        icon:icon];
+        // Add checkmark for selected hosts from map
+        if ([self isHostAddressSelected:host.address]) {
+            hostItem.state = NSControlStateValueOn;
+        }
         [items addObject:hostItem];
     }
     return items;
@@ -1512,6 +1577,10 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
                                                            value:bytesStr
                                                            color:connColor
                                                             icon:connectionIcon];
+        // Add checkmark for selected connection from map
+        if ([self isConnectionSelected:connection]) {
+            connectionItem.state = NSControlStateValueOn;
+        }
         [items addObject:connectionItem];
     }
     return items;
@@ -2518,6 +2587,37 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
     self.sectionProcessActivityExpanded = !self.sectionProcessActivityExpanded;
     SNBLogUIDebug("Toggled process activity section: %d", self.sectionProcessActivityExpanded);
     [self requestFullVisualizationRefresh];
+}
+
+#pragma mark - MapMenuViewDelegate
+
+- (void)mapMenuView:(MapMenuView *)mapView didSelectConnectionWithSource:(NSString *)sourceIP destination:(NSString *)destinationIP {
+    self.selectedSourceIP = sourceIP;
+    self.selectedDestinationIP = destinationIP;
+    SNBLogUIDebug("Map selection changed: src=%{public}@ dst=%{public}@", sourceIP, destinationIP);
+
+    // Directly refresh sections that show highlighting instead of requesting full rebuild
+    // (full rebuild is skipped when menu is open to keep it stable)
+    if (self.lastTrafficStats) {
+        [self refreshTopHostsSectionWithStats:self.lastTrafficStats];
+        [self refreshTopConnectionsSectionWithStats:self.lastTrafficStats];
+        [self refreshProcessActivitySectionWithStats:self.lastTrafficStats];
+        SNBLogUIDebug("Refreshed sections with highlighting for selection");
+    }
+}
+
+- (void)mapMenuViewDidClearSelection:(MapMenuView *)mapView {
+    self.selectedSourceIP = nil;
+    self.selectedDestinationIP = nil;
+    SNBLogUIDebug("Map selection cleared");
+
+    // Directly refresh sections to remove highlighting
+    if (self.lastTrafficStats) {
+        [self refreshTopHostsSectionWithStats:self.lastTrafficStats];
+        [self refreshTopConnectionsSectionWithStats:self.lastTrafficStats];
+        [self refreshProcessActivitySectionWithStats:self.lastTrafficStats];
+        SNBLogUIDebug("Refreshed sections after clearing selection");
+    }
 }
 
 @end
