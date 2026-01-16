@@ -134,5 +134,19 @@
 	<integer>60</integer>
 	<key>GreyNoiseTTL</key>
 	<real>86400.0</real>
+
+	<!-- Shodan Provider Configuration -->
+	<key>ShodanEnabled</key>
+	<false/>
+	<key>ShodanAPIURL</key>
+	<string>https://api.shodan.io</string>
+	<key>ShodanAPIKey</key>
+	<string>YOUR_API_KEY_HERE</string>
+	<key>ShodanTimeout</key>
+	<real>10.0</real>
+	<key>ShodanMaxRequestsPerMin</key>
+	<integer>60</integer>
+	<key>ShodanTTL</key>
+	<real>86400.0</real>
 </dict>
 </plist>

@@ -9,12 +9,14 @@
 #import "VirusTotalProvider.h"
 #import "AbuseIPDBProvider.h"
 #import "GreyNoiseProvider.h"
+#import "ShodanProvider.h"
 #import "ThreatIntelModels.h"
 
 @interface ProviderTests : XCTestCase
 @property (nonatomic, strong) VirusTotalProvider *vtProvider;
 @property (nonatomic, strong) AbuseIPDBProvider *abuseProvider;
 @property (nonatomic, strong) GreyNoiseProvider *greyNoiseProvider;
+@property (nonatomic, strong) ShodanProvider *shodanProvider;
 @end
 
 @implementation ProviderTests
@@ -26,12 +28,14 @@
                                                      negativeTTL:300
                                                    maxAgeInDays:90];
     self.greyNoiseProvider = [[GreyNoiseProvider alloc] initWithTTL:3600 negativeTTL:300];
+    self.shodanProvider = [[ShodanProvider alloc] initWithTTL:3600 negativeTTL:300];
 }
 
 - (void)tearDown {
     self.vtProvider = nil;
     self.abuseProvider = nil;
     self.greyNoiseProvider = nil;
+    self.shodanProvider = nil;
     [super tearDown];
 }
 
@@ -180,6 +184,56 @@
     XCTestExpectation *expectation = [self expectationWithDescription:@"Health check complete"];
 
     [self.greyNoiseProvider isHealthyWithCompletion:^(BOOL healthy) {
+        XCTAssertTrue(healthy, @"Provider should be healthy");
+        [expectation fulfill];
+    }];
+
+    [self waitForExpectationsWithTimeout:1.0 handler:nil];
+}
+
+#pragma mark - Shodan Provider Tests
+
+- (void)testShodanProviderInitialization {
+    XCTAssertNotNil(self.shodanProvider, @"Shodan provider should initialize");
+    XCTAssertEqualObjects(self.shodanProvider.name, @"Shodan", @"Provider name should be Shodan");
+    XCTAssertEqual(self.shodanProvider.defaultTTL, 3600, @"Default TTL should match");
+    XCTAssertEqual(self.shodanProvider.negativeCacheTTL, 300, @"Negative cache TTL should match");
+}
+
+- (void)testShodanConfiguration {
+    XCTestExpectation *expectation = [self expectationWithDescription:@"Configuration complete"];
+
+    [self.shodanProvider configureWithBaseURL:@"https://api.shodan.io"
+                                       APIKey:@"test-api-key"
+                                      timeout:10.0
+                            maxRequestsPerMin:60
+                                   completion:^(NSError *error) {
+        XCTAssertNil(error, @"Configuration should not error");
+        [expectation fulfill];
+    }];
+
+    [self waitForExpectationsWithTimeout:1.0 handler:nil];
+}
+
+- (void)testShodanSupportsIPv4 {
+    BOOL supports = [self.shodanProvider supportsIndicatorType:TIIndicatorTypeIPv4];
+    XCTAssertTrue(supports, @"Should support IPv4");
+}
+
+- (void)testShodanSupportsIPv6 {
+    BOOL supports = [self.shodanProvider supportsIndicatorType:TIIndicatorTypeIPv6];
+    XCTAssertTrue(supports, @"Should support IPv6");
+}
+
+- (void)testShodanDoesNotSupportDomain {
+    BOOL supports = [self.shodanProvider supportsIndicatorType:TIIndicatorTypeDomain];
+    XCTAssertFalse(supports, @"Should not support Domain");
+}
+
+- (void)testShodanHealthCheck {
+    XCTestExpectation *expectation = [self expectationWithDescription:@"Health check complete"];
+
+    [self.shodanProvider isHealthyWithCompletion:^(BOOL healthy) {
         XCTAssertTrue(healthy, @"Provider should be healthy");
         [expectation fulfill];
     }];

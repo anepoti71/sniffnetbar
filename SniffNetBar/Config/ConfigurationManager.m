@@ -13,6 +13,7 @@
 NSString * const kVirusTotalAPIKeyIdentifier = @"VirusTotalAPIKey";
 NSString * const kAbuseIPDBAPIKeyIdentifier = @"AbuseIPDBAPIKey";
 NSString * const kGreyNoiseAPIKeyIdentifier = @"GreyNoiseAPIKey";
+NSString * const kShodanAPIKeyIdentifier = @"ShodanAPIKey";
 NSString * const kIpInfoAPITokenIdentifier = @"IpInfoAPIToken";
 
 @interface ConfigurationManager ()
@@ -98,7 +99,13 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
         @"ExplainabilityOllamaBaseURL": @"http://127.0.0.1:11434",
         @"ExplainabilityOllamaModel": @"llama3.1",
         @"ExplainabilityOllamaTimeout": @10.0,
-        @"ExplainabilityMinScore": @0.90
+        @"ExplainabilityMinScore": @0.90,
+        @"ShodanEnabled": @NO,
+        @"ShodanAPIURL": @"https://api.shodan.io",
+        @"ShodanAPIKey": @"YOUR_API_KEY_HERE",
+        @"ShodanTimeout": @10.0,
+        @"ShodanMaxRequestsPerMin": @60,
+        @"ShodanTTL": @86400.0
     };
     SNBLogConfigInfo("Using default configuration");
     NSError *validationError = nil;
@@ -555,6 +562,53 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
 
 - (NSTimeInterval)greyNoiseTTL {
     NSNumber *value = self.configuration[@"GreyNoiseTTL"];
+    return value ? [value doubleValue] : 86400.0;
+}
+
+#pragma mark - Shodan Provider Configuration
+
+- (BOOL)shodanEnabled {
+    NSNumber *value = self.configuration[@"ShodanEnabled"];
+    return value ? [value boolValue] : NO;
+}
+
+- (NSString *)shodanAPIURL {
+    NSString *value = self.configuration[@"ShodanAPIURL"];
+    return value.length > 0 ? value : @"https://api.shodan.io";
+}
+
+- (NSString *)shodanAPIKey {
+    NSError *error = nil;
+    NSString *keychainKey = [KeychainManager getAPIKeyForIdentifier:kShodanAPIKeyIdentifier
+                                                              error:&error];
+    if (keychainKey.length > 0) {
+        return keychainKey;
+    }
+
+    NSString *plistKey = self.configuration[@"ShodanAPIKey"];
+    if (plistKey.length > 0 && ![plistKey isEqualToString:@"YOUR_API_KEY_HERE"]) {
+        [KeychainManager saveAPIKey:plistKey
+                      forIdentifier:kShodanAPIKeyIdentifier
+                              error:nil];
+        SNBLogConfigInfo("Migrated Shodan API key to keychain");
+        return plistKey;
+    }
+
+    return @"";
+}
+
+- (NSTimeInterval)shodanTimeout {
+    NSNumber *value = self.configuration[@"ShodanTimeout"];
+    return value ? [value doubleValue] : 10.0;
+}
+
+- (NSInteger)shodanMaxRequestsPerMin {
+    NSNumber *value = self.configuration[@"ShodanMaxRequestsPerMin"];
+    return value ? [value integerValue] : 60;
+}
+
+- (NSTimeInterval)shodanTTL {
+    NSNumber *value = self.configuration[@"ShodanTTL"];
     return value ? [value doubleValue] : 86400.0;
 }
 

@@ -9,6 +9,7 @@
 #import "ConfigurationManager.h"
 #import "IPAddressUtilities.h"
 #import "Logger.h"
+#import <math.h>
 
 @interface ThreatIntelFacade ()
 @property (nonatomic, strong) NSMutableArray<id<ThreatIntelProvider>> *providers;
@@ -444,6 +445,16 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
     NSMutableArray<TIScoreBreakdown *> *breakdown = [NSMutableArray array];
     NSInteger totalScore = 0;
     NSMutableArray<NSNumber *> *confidences = [NSMutableArray array];
+    NSDictionary<NSString *, NSNumber *> *providerWeights = @{
+        @"VirusTotal": @1.0,
+        @"AbuseIPDB": @0.9,
+        @"GreyNoise": @0.8,
+        @"Shodan": @0.7
+    };
+    NSSet<NSString *> *highRiskKeywords = [NSSet setWithArray:@[
+        @"malware", @"trojan", @"phishing", @"scam", @"botnet", @"c2", @"command-and-control",
+        @"vulnerability", @"exploit", @"scanner", @"spam", @"bruteforce", @"compromised", @"abuse"
+    ]];
 
     // Simple scoring rules
     for (TIResult *result in results) {
@@ -451,6 +462,10 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
 
         NSInteger score = 0;
         NSString *ruleDesc = @"";
+        double providerWeight = providerWeights[result.providerName].doubleValue;
+        if (providerWeight <= 0.0) {
+            providerWeight = 1.0;
+        }
 
         // Score based on confidence
         if (result.verdict.confidence >= 75) {
@@ -467,29 +482,37 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
         // Category bonuses
         for (NSString *category in result.verdict.categories) {
             NSString *categoryLower = [category lowercaseString];
-            if ([categoryLower containsString:@"malware"] || [categoryLower containsString:@"trojan"]) {
-                score += 15;
-            } else if ([categoryLower containsString:@"phishing"] || [categoryLower containsString:@"scam"]) {
-                score += 10;
-            } else if ([categoryLower containsString:@"botnet"] || [categoryLower containsString:@"c2"]) {
-                score += 15;
+            BOOL matched = NO;
+            for (NSString *keyword in highRiskKeywords) {
+                if ([categoryLower containsString:keyword]) {
+                    matched = YES;
+                    break;
+                }
+            }
+            if (matched) {
+                score += 12;
             }
         }
 
         if (score > 0) {
+            NSInteger weightedScore = (NSInteger)lround((double)score * providerWeight);
+            if (weightedScore == 0) {
+                weightedScore = 1;
+            }
             TIScoreBreakdown *item = [[TIScoreBreakdown alloc] init];
             item.ruleName = [NSString stringWithFormat:@"%@_detection", result.providerName];
             item.ruleDescription = ruleDesc;
             item.provider = result.providerName;
-            item.scoreContribution = score;
+            item.scoreContribution = weightedScore;
             item.confidence = result.verdict.confidence;
             item.evidence = @{
                 @"categories": [result.verdict.categories componentsJoinedByString:@", "],
-                @"confidence": [NSString stringWithFormat:@"%ld", (long)result.verdict.confidence]
+                @"confidence": [NSString stringWithFormat:@"%ld", (long)result.verdict.confidence],
+                @"provider_weight": [NSString stringWithFormat:@"%.2f", providerWeight]
             };
 
             [breakdown addObject:item];
-            totalScore += score;
+            totalScore += weightedScore;
             [confidences addObject:@(result.verdict.confidence / 100.0)];
         }
     }

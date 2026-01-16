@@ -11,6 +11,7 @@
 #import "VirusTotalProvider.h"
 #import "AbuseIPDBProvider.h"
 #import "GreyNoiseProvider.h"
+#import "ShodanProvider.h"
 #import "IPAddressUtilities.h"
 #import "Logger.h"
 
@@ -107,6 +108,28 @@
         SNBLogThreatIntelDebug("GreyNoise provider disabled (enabled: %{public}@, has key: %{public}@)",
                                config.greyNoiseEnabled ? @"YES" : @"NO",
                                config.greyNoiseAPIKey.length > 0 ? @"YES" : @"NO");
+    }
+
+    if (config.shodanEnabled && config.shodanAPIKey.length > 0) {
+        ShodanProvider *shodanProvider = [[ShodanProvider alloc] initWithTTL:config.shodanTTL
+                                                                  negativeTTL:3600.0];
+        [shodanProvider configureWithBaseURL:config.shodanAPIURL
+                                      APIKey:config.shodanAPIKey
+                                     timeout:config.shodanTimeout
+                           maxRequestsPerMin:config.shodanMaxRequestsPerMin
+                                  completion:^(NSError *error) {
+            if (error) {
+                SNBLogThreatIntelError("Failed to configure Shodan: %{public}@", error.localizedDescription);
+            } else {
+                SNBLogThreatIntelInfo("Shodan provider configured successfully");
+            }
+        }];
+        [self.facade addProvider:shodanProvider];
+        SNBLogThreatIntelDebug("Shodan provider added");
+    } else {
+        SNBLogThreatIntelDebug("Shodan provider disabled (enabled: %{public}@, has key: %{public}@)",
+                               config.shodanEnabled ? @"YES" : @"NO",
+                               config.shodanAPIKey.length > 0 ? @"YES" : @"NO");
     }
 
     SNBLogThreatIntelInfo("Threat Intelligence initialized (enabled: %{public}@)", self.isEnabled ? @"YES" : @"NO");
@@ -208,6 +231,9 @@
     }
     if ([error.domain isEqualToString:@"GreyNoiseProvider"]) {
         return @"GreyNoise";
+    }
+    if ([error.domain isEqualToString:@"ShodanProvider"]) {
+        return @"Shodan";
     }
     NSArray<NSError *> *providerErrors = error.userInfo[@"providerErrors"];
     if ([providerErrors isKindOfClass:[NSArray class]] && providerErrors.count > 0) {

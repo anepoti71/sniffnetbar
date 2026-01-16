@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 extern NSString * const kVirusTotalAPIKeyIdentifier;
 extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 extern NSString * const kGreyNoiseAPIKeyIdentifier;
+extern NSString * const kShodanAPIKeyIdentifier;
 extern NSString * const kIpInfoAPITokenIdentifier;
 
 /**
@@ -99,6 +100,14 @@ extern NSString * const kIpInfoAPITokenIdentifier;
 @property (nonatomic, readonly) NSInteger greyNoiseMaxRequestsPerMin;
 @property (nonatomic, readonly) NSTimeInterval greyNoiseTTL;
 
+// Shodan Provider Configuration
+@property (nonatomic, readonly) BOOL shodanEnabled;
+@property (nonatomic, readonly) NSString *shodanAPIURL;
+@property (nonatomic, readonly) NSString *shodanAPIKey;
+@property (nonatomic, readonly) NSTimeInterval shodanTimeout;
+@property (nonatomic, readonly) NSInteger shodanMaxRequestsPerMin;
+@property (nonatomic, readonly) NSTimeInterval shodanTTL;
+
 /**
  * Reload configuration from the plist file
  * Useful if the configuration file is modified at runtime
@@ -113,7 +122,7 @@ extern NSString * const kIpInfoAPITokenIdentifier;
 /**
  * Set an API key in the keychain
  * @param apiKey The API key to store (if nil or empty, removes the keychain item)
- * @param identifier The keychain identifier (use kVirusTotalAPIKeyIdentifier, kAbuseIPDBAPIKeyIdentifier, or kGreyNoiseAPIKeyIdentifier)
+ * @param identifier The keychain identifier (use kVirusTotalAPIKeyIdentifier, kAbuseIPDBAPIKeyIdentifier, kGreyNoiseAPIKeyIdentifier, or kShodanAPIKeyIdentifier)
  */
 - (void)setAPIKey:(nullable NSString *)apiKey forIdentifier:(NSString *)identifier;
 

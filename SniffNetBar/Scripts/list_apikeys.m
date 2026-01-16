@@ -12,6 +12,7 @@
 extern NSString * const kVirusTotalAPIKeyIdentifier;
 extern NSString * const kAbuseIPDBAPIKeyIdentifier;
 extern NSString * const kGreyNoiseAPIKeyIdentifier;
+extern NSString * const kShodanAPIKeyIdentifier;
 extern NSString * const kIpInfoAPITokenIdentifier;
 
 NSString *maskAPIKey(NSString *apiKey) {
@@ -34,6 +35,7 @@ int main(int argc, const char * argv[]) {
             @{@"name": @"VirusTotal", @"identifier": kVirusTotalAPIKeyIdentifier},
             @{@"name": @"AbuseIPDB", @"identifier": kAbuseIPDBAPIKeyIdentifier},
             @{@"name": @"GreyNoise", @"identifier": kGreyNoiseAPIKeyIdentifier},
+            @{@"name": @"Shodan", @"identifier": kShodanAPIKeyIdentifier},
             @{@"name": @"ipinfo", @"identifier": kIpInfoAPITokenIdentifier}
         ];
 
