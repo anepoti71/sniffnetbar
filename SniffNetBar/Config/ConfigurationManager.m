@@ -582,16 +582,25 @@ BOOL SNBConfigurationManagerIsInitializing(void) {
     NSString *keychainKey = [KeychainManager getAPIKeyForIdentifier:kShodanAPIKeyIdentifier
                                                               error:&error];
     if (keychainKey.length > 0) {
-        return keychainKey;
+        NSString *trimmed = [keychainKey stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (trimmed.length > 0) {
+            SNBLogConfigInfo("Loaded Shodan API key from keychain (length=%lu)",
+                             (unsigned long)trimmed.length);
+            return trimmed;
+        }
     }
 
     NSString *plistKey = self.configuration[@"ShodanAPIKey"];
     if (plistKey.length > 0 && ![plistKey isEqualToString:@"YOUR_API_KEY_HERE"]) {
-        [KeychainManager saveAPIKey:plistKey
+        NSString *trimmed = [plistKey stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (trimmed.length == 0) {
+            return @"";
+        }
+        [KeychainManager saveAPIKey:trimmed
                       forIdentifier:kShodanAPIKeyIdentifier
                               error:nil];
         SNBLogConfigInfo("Migrated Shodan API key to keychain");
-        return plistKey;
+        return trimmed;
     }
 
     return @"";

@@ -98,8 +98,10 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
     config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
     self.session = [NSURLSession sessionWithConfiguration:config];
 
-    SNBLogThreatIntelInfo("Configured with API key (rate limit: %ld req/min, URL: %{public}@)",
-                          (long)maxRequestsPerMin, self.apiBaseURL);
+    SNBLogThreatIntelInfo("Configured with API key (length=%lu, rate limit: %ld req/min, URL: %{public}@)",
+                          (unsigned long)self.apiKey.length,
+                          (long)maxRequestsPerMin,
+                          self.apiBaseURL);
 
     if (completion) completion(nil);
 }
@@ -177,11 +179,17 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
 
 - (void)performEnrichment:(TIIndicator *)indicator
                completion:(void (^)(TIResult *, NSError *))completion {
-    NSString *urlString = [NSString stringWithFormat:@"%@/shodan/host/%@?key=%@",
-                           self.apiBaseURL,
-                           indicator.value,
-                           self.apiKey];
-    NSURL *url = [NSURL URLWithString:urlString];
+    NSURL *baseURL = [NSURL URLWithString:self.apiBaseURL];
+    NSURL *url = nil;
+    if (baseURL) {
+        NSURL *hostURL = [[baseURL URLByAppendingPathComponent:@"shodan"] URLByAppendingPathComponent:@"host"];
+        hostURL = [hostURL URLByAppendingPathComponent:indicator.value];
+        NSURLComponents *components = [NSURLComponents componentsWithURL:hostURL resolvingAgainstBaseURL:NO];
+        components.queryItems = @[
+            [NSURLQueryItem queryItemWithName:@"key" value:self.apiKey]
+        ];
+        url = components.URL;
+    }
     if (!url) {
         NSError *error = [NSError errorWithDomain:@"ShodanProvider"
                                              code:1004
@@ -189,6 +197,15 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
         if (completion) completion(nil, error);
         return;
     }
+
+    NSURLComponents *sanitizedComponents = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    sanitizedComponents.queryItems = @[
+        [NSURLQueryItem queryItemWithName:@"key" value:@"***"]
+    ];
+    NSString *sanitizedURL = sanitizedComponents.URL.absoluteString ?: @"(invalid)";
+    SNBLogThreatIntelDebug("Shodan request URL: %{public}@ (key length=%lu)",
+                           sanitizedURL,
+                           (unsigned long)self.apiKey.length);
 
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     [request setHTTPMethod:@"GET"];
@@ -205,11 +222,43 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
 
         NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
         NSInteger statusCode = httpResponse.statusCode;
+        NSString *responseText = nil;
+        if (data.length > 0) {
+            responseText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            if (!responseText) {
+                responseText = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
+            }
+        }
+        NSString *trimmedResponse = nil;
+        if (responseText.length > 0) {
+            trimmedResponse = [responseText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (trimmedResponse.length > 300) {
+                trimmedResponse = [[trimmedResponse substringToIndex:300] stringByAppendingString:@"..."];
+            }
+        }
 
         if (statusCode == 401 || statusCode == 403) {
+            if (trimmedResponse.length > 0) {
+                SNBLogThreatIntelWarn("Shodan auth response (status=%ld): %{public}@",
+                                      (long)statusCode,
+                                      trimmedResponse);
+            }
+            NSString *responseMessage = nil;
+            if (data.length > 0) {
+                NSDictionary *errorJSON = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                if ([errorJSON isKindOfClass:[NSDictionary class]]) {
+                    NSString *errorText = errorJSON[@"error"];
+                    if ([errorText isKindOfClass:[NSString class]] && errorText.length > 0) {
+                        responseMessage = errorText;
+                    }
+                }
+            }
+            NSString *message = responseMessage.length > 0
+                ? [NSString stringWithFormat:@"Authentication failed (%@)", responseMessage]
+                : @"Authentication failed (check API key)";
             NSError *authError = [NSError errorWithDomain:@"ShodanProvider"
                                                      code:1003
-                                                 userInfo:@{NSLocalizedDescriptionKey: @"Invalid API key"}];
+                                                 userInfo:@{NSLocalizedDescriptionKey: message}];
             if (completion) completion(nil, authError);
             return;
         }
@@ -222,6 +271,9 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
 
         if (statusCode == 429) {
             SNBLogThreatIntelWarn("Rate limit (429) exceeded for Shodan IP: %{" SNB_IP_PRIVACY "}@", indicator.value);
+            if (trimmedResponse.length > 0) {
+                SNBLogThreatIntelWarn("Shodan rate limit response: %{public}@", trimmedResponse);
+            }
 
             NSString *retryAfterHeader = httpResponse.allHeaderFields[@"Retry-After"];
             NSTimeInterval retryDelay = retryAfterHeader ? [retryAfterHeader doubleValue] : 60.0;
@@ -238,6 +290,11 @@ static NSTimeInterval const kDefaultNegativeTTL = 3600.0;  // 1 hour
         }
 
         if (statusCode != 200) {
+            if (trimmedResponse.length > 0) {
+                SNBLogThreatIntelWarn("Shodan error response (status=%ld): %{public}@",
+                                      (long)statusCode,
+                                      trimmedResponse);
+            }
             NSError *httpError = [NSError errorWithDomain:@"ShodanProvider"
                                                      code:statusCode
                                                  userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"HTTP %ld", (long)statusCode]}];

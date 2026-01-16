@@ -1774,7 +1774,7 @@ static NSSet<NSString *> *SNBLocalIPAddresses(void) {
         cleanInfo.ipAddress = ip;
         cleanInfo.response = response;
         cleanInfo.severityLevel = ThreatSeverityNone;
-        cleanInfo.score = 0;
+        cleanInfo.score = response.scoringResult ? response.scoringResult.finalScore : 0;
         cleanInfo.isActive = YES;
         cleanInfo.totalBytes = [self totalBytesForIP:ip inStats:stats];
 

@@ -132,15 +132,17 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
         for (TIResult *result in storedResponse.providerResults) {
             [self.cache setResult:result];
         }
-        [self completeEnrichmentForKey:key response:storedResponse error:nil];
-        return;
     }
 
     // Get applicable providers
     NSArray<id<ThreatIntelProvider>> *applicableProviders = [self getApplicableProvidersForIndicator:indicator];
 
     if (applicableProviders.count == 0) {
-        [self completeEnrichmentForKey:key response:nil error:[self errorNoProviders]];
+        if (storedResponse) {
+            [self completeEnrichmentForKey:key response:storedResponse error:nil];
+        } else {
+            [self completeEnrichmentForKey:key response:nil error:[self errorNoProviders]];
+        }
         return;
     }
 
@@ -148,12 +150,26 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
     dispatch_group_t group = dispatch_group_create();
     NSMutableArray<TIResult *> *results = [NSMutableArray array];
     NSMutableArray<NSError *> *errors = [NSMutableArray array];
+    NSMutableSet<NSString *> *existingProviders = [NSMutableSet set];
     __block NSInteger cacheHits = 0;
     __block BOOL timedOut = NO;
     NSDate *now = [NSDate date];
     __block NSInteger availableCount = 0;
+    NSMutableArray<id<ThreatIntelProvider>> *providersToQuery = [NSMutableArray array];
+
+    if (storedResponse) {
+        for (TIResult *result in storedResponse.providerResults) {
+            if (result.providerName.length > 0) {
+                [existingProviders addObject:result.providerName];
+            }
+            [results addObject:result];
+        }
+    }
 
     for (id<ThreatIntelProvider> provider in applicableProviders) {
+        if ([existingProviders containsObject:provider.name]) {
+            continue;
+        }
         // Check cache first
         TIResult *cachedResult = [self.cache getResultForProvider:provider.name indicator:indicator];
 
@@ -171,10 +187,74 @@ static NSString *const kProviderRetryAfterKey = @"retry_after";
             @synchronized(results) {
                 [errors addObject:unavailable];
             }
+            @synchronized(self.providerDisableReasons) {
+                NSString *reason = self.providerDisableReasons[provider.name];
+                SNBLogThreatIntelWarn("Provider %{public}@ unavailable for %{" SNB_IP_PRIVACY "}@ (%{public}@)",
+                                      provider.name,
+                                      indicator.value,
+                                      reason ?: @"cooldown");
+            }
             continue;
         }
 
         availableCount += 1;
+        [providersToQuery addObject:provider];
+    }
+
+    if (providersToQuery.count == 0) {
+        if (results.count == 0) {
+            [self completeEnrichmentForKey:key response:nil error:[self errorNoProviders]];
+            return;
+        }
+
+        TIScoringResult *scoringResult = [self calculateScoringForResults:[results copy] indicator:indicator];
+
+        TIEnrichmentResponse *response = [[TIEnrichmentResponse alloc] init];
+        response.indicator = indicator;
+        response.providerResults = [results copy];
+        response.scoringResult = scoringResult;
+        response.duration = [[NSDate date] timeIntervalSinceDate:startTime];
+        response.cacheHits = cacheHits;
+
+        SNBLogThreatIntelDebug("Enrichment completed for %{" SNB_IP_PRIVACY "}@ - %lu providers, %ld hits, score=%ld, verdict=%{public}@",
+               indicator.value, (unsigned long)results.count, (long)cacheHits,
+               (long)scoringResult.finalScore, [scoringResult verdictString]);
+
+        if (response.scoringResult && response.providerResults.count > 0) {
+            [self.store storeResponse:response];
+        }
+
+        [self completeEnrichmentForKey:key response:response error:nil];
+        return;
+    }
+
+    if (storedResponse) {
+        NSMutableArray<NSString *> *existingList = [NSMutableArray array];
+        NSMutableArray<NSString *> *missingList = [NSMutableArray array];
+        for (NSString *name in existingProviders) {
+            [existingList addObject:name];
+        }
+        for (id<ThreatIntelProvider> provider in providersToQuery) {
+            [missingList addObject:provider.name];
+        }
+        NSString *existingSummary = existingList.count > 0 ? [existingList componentsJoinedByString:@", "] : @"none";
+        NSString *missingSummary = missingList.count > 0 ? [missingList componentsJoinedByString:@", "] : @"none";
+        SNBLogThreatIntelInfo("Threat intel cache for %{" SNB_IP_PRIVACY "}@ -> existing [%{public}@], querying [%{public}@]",
+                              indicator.value,
+                              existingSummary,
+                              missingSummary);
+    } else {
+        NSMutableArray<NSString *> *queryList = [NSMutableArray array];
+        for (id<ThreatIntelProvider> provider in providersToQuery) {
+            [queryList addObject:provider.name];
+        }
+        NSString *querySummary = queryList.count > 0 ? [queryList componentsJoinedByString:@", "] : @"none";
+        SNBLogThreatIntelInfo("Threat intel query for %{" SNB_IP_PRIVACY "}@ -> providers [%{public}@]",
+                              indicator.value,
+                              querySummary);
+    }
+
+    for (id<ThreatIntelProvider> provider in providersToQuery) {
         dispatch_group_enter(group);
 
         // Query provider

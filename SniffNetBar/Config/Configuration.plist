@@ -137,7 +137,7 @@
 
 	<!-- Shodan Provider Configuration -->
 	<key>ShodanEnabled</key>
-	<false/>
+	<true/>
 	<key>ShodanAPIURL</key>
 	<string>https://api.shodan.io</string>
 	<key>ShodanAPIKey</key>

@@ -59,6 +59,7 @@
         }];
         [self.facade addProvider:vtProvider];
         SNBLogThreatIntelDebug("VirusTotal provider added");
+        [self logProviderHealth:vtProvider];
     } else {
         SNBLogThreatIntelDebug("VirusTotal provider disabled (enabled: %{public}@, has key: %{public}@)",
                                config.virusTotalEnabled ? @"YES" : @"NO",
@@ -82,6 +83,7 @@
         }];
         [self.facade addProvider:abuseProvider];
         SNBLogThreatIntelDebug("AbuseIPDB provider added");
+        [self logProviderHealth:abuseProvider];
     } else {
         SNBLogThreatIntelDebug("AbuseIPDB provider disabled (enabled: %{public}@, has key: %{public}@)",
                                config.abuseIPDBEnabled ? @"YES" : @"NO",
@@ -104,6 +106,7 @@
         }];
         [self.facade addProvider:greyNoiseProvider];
         SNBLogThreatIntelDebug("GreyNoise provider added");
+        [self logProviderHealth:greyNoiseProvider];
     } else {
         SNBLogThreatIntelDebug("GreyNoise provider disabled (enabled: %{public}@, has key: %{public}@)",
                                config.greyNoiseEnabled ? @"YES" : @"NO",
@@ -126,6 +129,7 @@
         }];
         [self.facade addProvider:shodanProvider];
         SNBLogThreatIntelDebug("Shodan provider added");
+        [self logProviderHealth:shodanProvider];
     } else {
         SNBLogThreatIntelDebug("Shodan provider disabled (enabled: %{public}@, has key: %{public}@)",
                                config.shodanEnabled ? @"YES" : @"NO",
@@ -133,6 +137,14 @@
     }
 
     SNBLogThreatIntelInfo("Threat Intelligence initialized (enabled: %{public}@)", self.isEnabled ? @"YES" : @"NO");
+}
+
+- (void)logProviderHealth:(id<ThreatIntelProvider>)provider {
+    [provider isHealthyWithCompletion:^(BOOL healthy) {
+        SNBLogThreatIntelInfo("Provider %{public}@ health: %{public}@",
+                              provider.name,
+                              healthy ? @"OK" : @"NOT READY");
+    }];
 }
 
 - (void)toggleEnabled {

@@ -15,6 +15,27 @@ extern NSString * const kGreyNoiseAPIKeyIdentifier;
 extern NSString * const kShodanAPIKeyIdentifier;
 extern NSString * const kIpInfoAPITokenIdentifier;
 
+static BOOL deleteWithSecurityCLI(NSString *identifier) {
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/usr/bin/security";
+    task.arguments = @[@"delete-generic-password",
+                       @"-s", @"com.sniffnetbar.api-keys",
+                       @"-a", identifier];
+
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = pipe;
+
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (NSException *exception) {
+        return NO;
+    }
+
+    return (task.terminationStatus == 0);
+}
+
 void printUsage(const char *progName) {
     printf("Usage: %s <provider>\n", progName);
     printf("\nProviders:\n");
@@ -72,10 +93,20 @@ int main(int argc, const char * argv[]) {
             if (success) {
                 printf("✓ API key for %s removed from keychain\n", [identifier UTF8String]);
             } else {
-                printf("✗ Failed to remove API key for %s: %s\n",
-                       [identifier UTF8String],
-                       [error.localizedDescription UTF8String]);
-                allSuccess = NO;
+                NSString *description = error.localizedDescription ?: @"Unknown error";
+                BOOL fallbackSuccess = NO;
+                if ([description containsString:@"-25244"]) {
+                    fallbackSuccess = deleteWithSecurityCLI(identifier);
+                }
+
+                if (fallbackSuccess) {
+                    printf("✓ API key for %s removed via security tool\n", [identifier UTF8String]);
+                } else {
+                    printf("✗ Failed to remove API key for %s: %s\n",
+                           [identifier UTF8String],
+                           [description UTF8String]);
+                    allSuccess = NO;
+                }
             }
         }
 
